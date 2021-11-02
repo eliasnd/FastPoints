@@ -61,6 +61,8 @@ namespace FastPoints {
             if (format == Format.INVALID)
                 ReadHeader();
 
+            Debug.Log(format);
+
             switch (format) {
                 case Format.BINARY_LITTLE_ENDIAN:
                     return ReadPointsBLE(pointCount, target);
@@ -79,6 +81,7 @@ namespace FastPoints {
 
         void ReadHeader() {
             int bodyOffset = 0;
+            properties = new List<Property>();
 
             string line = sReader.ReadLine();
             bodyOffset += line.Length + 1;
@@ -171,12 +174,57 @@ namespace FastPoints {
             stream.Position = bodyOffset;
         }
 
+        bool ReadPointsASCII(int pointCount, Vector4[] target) {
+            bool result = index + pointCount <= count;
+
+            if (!result)
+                pointCount = count - index;
+
+            for (int i = 0; i < pointCount; i++) {
+
+                float x = 0, y = 0, z = 0;
+                byte r = 255, g = 255, b = 255, a = 255;
+
+                string[] line = sReader.ReadLine().Split(' ');
+
+                for (int j = 0; j < properties.Count; j++) {
+                    double val = double.Parse(line[j]);
+
+                    switch (properties[j]) {
+                        case Property.R8: r = Convert.ToByte(val); break;
+                        case Property.G8: g = Convert.ToByte(val); break;
+                        case Property.B8: b = Convert.ToByte(val); break;
+                        case Property.A8: a = Convert.ToByte(val); break;
+
+                        case Property.R16: r = (byte)(Convert.ToUInt16(val) >> 8); break;
+                        case Property.G16: g = (byte)(Convert.ToUInt16(val) >> 8); break;
+                        case Property.B16: b = (byte)(Convert.ToUInt16(val) >> 8); break;
+                        case Property.A16: a = (byte)(Convert.ToUInt16(val) >> 8); break;
+
+                        case Property.SINGLE_X: x = (float)val; break;
+                        case Property.SINGLE_Y: y = (float)val; break;
+                        case Property.SINGLE_Z: z = (float)val; break;
+
+                        case Property.DOUBLE_X: x = (float)val; break;
+                        case Property.DOUBLE_Y: y = (float)val; break;
+                        case Property.DOUBLE_Z: z = (float)val; break;
+
+                        // case Property.DATA_8: case Property.DATA_16: case Property.DATA_32: case Property.DATA_64: break;
+                    }
+                }
+
+                target[i] = new Vector4(x, y, z, ((r << 24) | (g << 16) | (b << 8) | a));
+            }
+
+            return result;
+        }
+
 
         bool ReadPointsBLE(int pointCount, Vector4[] target) {
 
-            bool result = index + pointCount >= count;
+            bool result = index + pointCount <= count;
 
-            if (result)
+            if (!result)
                 pointCount = count - index;
 
             for (int i = 0; i < pointCount; i++) {
@@ -212,16 +260,14 @@ namespace FastPoints {
                 }
 
                 target[i] = new Vector4(x, y, z, ((r << 24) | (g << 16) | (b << 8) | a));
+                Debug.Log("point " + i);
+                Debug.Log(target[i]);
             }
 
             return result;
         }
 
         bool ReadPointsBBE(int pointCount, Vector4[] target) {
-            return false;
-        }
-
-        bool ReadPointsASCII(int pointCount, Vector4[] target) {
             return false;
         }
     }
