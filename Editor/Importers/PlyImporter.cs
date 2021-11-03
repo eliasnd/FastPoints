@@ -41,10 +41,6 @@ namespace FastPoints {
         BinaryReader bReader;
         List<Property> properties = null;
 
-        public override void OnImportAsset(AssetImportContext context) {
-            path = context.assetPath;
-            index = 0;
-        }
 
         public override bool OpenStream() {
             try {
@@ -61,22 +57,66 @@ namespace FastPoints {
             if (format == Format.INVALID)
                 ReadHeader();
 
-            Debug.Log(format);
+            bool result = index + pointCount <= count;
+
+            if (!result)
+                pointCount = count - index;
+
 
             switch (format) {
                 case Format.BINARY_LITTLE_ENDIAN:
-                    return ReadPointsBLE(pointCount, target);
-                    break;
+                    for (int i = 0; i < pointCount; i++)
+                        target[i] = ReadPointBLE();
+                    return true;
                 case Format.BINARY_BIG_ENDIAN:
-                    return ReadPointsBBE(pointCount, target);
-                    break;
+                    for (int i = 0; i < pointCount; i++)
+                        target[i] = ReadPointBBE();
+                    return true;
                 case Format.ASCII:
-                    return ReadPointsASCII(pointCount, target);
-                    break;
+                    for (int i = 0; i < pointCount; i++)
+                        target[i] = ReadPointASCII();
+                    return true;
                 default:
                     return false;
-                    break;
             }
+        }
+
+        public override bool SamplePoints(int pointCount, Vector4[] target)
+        {
+            if (format == Format.INVALID)
+                ReadHeader();
+
+            int interval = count / pointCount;
+            int lineLength;
+
+            if (interval < 1)
+                throw new ArgumentException("pointCount cannot exceed cloud size");
+
+            switch (format) {
+                case Format.BINARY_LITTLE_ENDIAN:
+                    lineLength = CalculateLineBytes(); 
+                    for (int i = 0; i < pointCount; i++) {
+                        target[index] = ReadPointBLE();
+                        bReader.ReadBytes(lineLength);
+                    }
+                    return true;
+                case Format.ASCII:
+                    for (int i = 0; i < pointCount; i++) {
+                        target[i] = ReadPointASCII();
+                        for (int j = 0; j < interval-1; j++) 
+                            sReader.ReadLine(); 
+                    }
+                    return true;
+                case Format.BINARY_BIG_ENDIAN:
+                    lineLength = CalculateLineBytes(); 
+                    for (int i = 0; i < pointCount; i++) {
+                        target[index] = ReadPointBBE();
+                        bReader.ReadBytes(lineLength);
+                    }
+                    return true;
+            }
+
+            return false;
         }
 
         void ReadHeader() {
@@ -172,103 +212,95 @@ namespace FastPoints {
             }
 
             stream.Position = bodyOffset;
-        }
+        } 
 
-        bool ReadPointsASCII(int pointCount, Vector4[] target) {
-            bool result = index + pointCount <= count;
+        Vector4 ReadPointASCII() {
+            float x = 0, y = 0, z = 0;
+            byte r = 255, g = 255, b = 255, a = 255;
 
-            if (!result)
-                pointCount = count - index;
+            string[] line = sReader.ReadLine().Split(' ');
 
-            for (int i = 0; i < pointCount; i++) {
+            for (int j = 0; j < properties.Count; j++) {
+                double val = double.Parse(line[j]);
 
-                float x = 0, y = 0, z = 0;
-                byte r = 255, g = 255, b = 255, a = 255;
+                switch (properties[j]) {
+                    case Property.R8: r = Convert.ToByte(val); break;
+                    case Property.G8: g = Convert.ToByte(val); break;
+                    case Property.B8: b = Convert.ToByte(val); break;
+                    case Property.A8: a = Convert.ToByte(val); break;
 
-                string[] line = sReader.ReadLine().Split(' ');
+                    case Property.R16: r = (byte)(Convert.ToUInt16(val) >> 8); break;
+                    case Property.G16: g = (byte)(Convert.ToUInt16(val) >> 8); break;
+                    case Property.B16: b = (byte)(Convert.ToUInt16(val) >> 8); break;
+                    case Property.A16: a = (byte)(Convert.ToUInt16(val) >> 8); break;
 
-                for (int j = 0; j < properties.Count; j++) {
-                    double val = double.Parse(line[j]);
+                    case Property.SINGLE_X: x = (float)val; break;
+                    case Property.SINGLE_Y: y = (float)val; break;
+                    case Property.SINGLE_Z: z = (float)val; break;
 
-                    switch (properties[j]) {
-                        case Property.R8: r = Convert.ToByte(val); break;
-                        case Property.G8: g = Convert.ToByte(val); break;
-                        case Property.B8: b = Convert.ToByte(val); break;
-                        case Property.A8: a = Convert.ToByte(val); break;
+                    case Property.DOUBLE_X: x = (float)val; break;
+                    case Property.DOUBLE_Y: y = (float)val; break;
+                    case Property.DOUBLE_Z: z = (float)val; break;
 
-                        case Property.R16: r = (byte)(Convert.ToUInt16(val) >> 8); break;
-                        case Property.G16: g = (byte)(Convert.ToUInt16(val) >> 8); break;
-                        case Property.B16: b = (byte)(Convert.ToUInt16(val) >> 8); break;
-                        case Property.A16: a = (byte)(Convert.ToUInt16(val) >> 8); break;
-
-                        case Property.SINGLE_X: x = (float)val; break;
-                        case Property.SINGLE_Y: y = (float)val; break;
-                        case Property.SINGLE_Z: z = (float)val; break;
-
-                        case Property.DOUBLE_X: x = (float)val; break;
-                        case Property.DOUBLE_Y: y = (float)val; break;
-                        case Property.DOUBLE_Z: z = (float)val; break;
-
-                        // case Property.DATA_8: case Property.DATA_16: case Property.DATA_32: case Property.DATA_64: break;
-                    }
+                    // case Property.DATA_8: case Property.DATA_16: case Property.DATA_32: case Property.DATA_64: break;
                 }
-
-                target[i] = new Vector4(x, y, z, ((r << 24) | (g << 16) | (b << 8) | a));
             }
 
-            return result;
+            return new Vector4(x, y, z, ((r << 24) | (g << 16) | (b << 8) | a));
+
         }
 
+        Vector4 ReadPointBLE() {
+            float x = 0, y = 0, z = 0;
+            byte r = 255, g = 255, b = 255, a = 255;
 
-        bool ReadPointsBLE(int pointCount, Vector4[] target) {
+            foreach (Property prop in properties) {
+                switch (prop) {
+                    case Property.R8: r = bReader.ReadByte(); break;
+                    case Property.G8: g = bReader.ReadByte(); break;
+                    case Property.B8: b = bReader.ReadByte(); break;
+                    case Property.A8: a = bReader.ReadByte(); break;
 
-            bool result = index + pointCount <= count;
+                    case Property.R16: r = (byte)(bReader.ReadUInt16() >> 8); break;
+                    case Property.G16: g = (byte)(bReader.ReadUInt16() >> 8); break;
+                    case Property.B16: b = (byte)(bReader.ReadUInt16() >> 8); break;
+                    case Property.A16: a = (byte)(bReader.ReadUInt16() >> 8); break;
 
-            if (!result)
-                pointCount = count - index;
+                    case Property.SINGLE_X: x = bReader.ReadSingle(); break;
+                    case Property.SINGLE_Y: y = bReader.ReadSingle(); break;
+                    case Property.SINGLE_Z: z = bReader.ReadSingle(); break;
 
-            for (int i = 0; i < pointCount; i++) {
+                    case Property.DOUBLE_X: x = (float)bReader.ReadDouble(); break;
+                    case Property.DOUBLE_Y: y = (float)bReader.ReadDouble(); break;
+                    case Property.DOUBLE_Z: z = (float)bReader.ReadDouble(); break;
 
-                float x = 0, y = 0, z = 0;
-                byte r = 255, g = 255, b = 255, a = 255;
-
-                foreach (Property prop in properties) {
-                    switch (prop) {
-                        case Property.R8: r = bReader.ReadByte(); break;
-                        case Property.G8: g = bReader.ReadByte(); break;
-                        case Property.B8: b = bReader.ReadByte(); break;
-                        case Property.A8: a = bReader.ReadByte(); break;
-
-                        case Property.R16: r = (byte)(bReader.ReadUInt16() >> 8); break;
-                        case Property.G16: g = (byte)(bReader.ReadUInt16() >> 8); break;
-                        case Property.B16: b = (byte)(bReader.ReadUInt16() >> 8); break;
-                        case Property.A16: a = (byte)(bReader.ReadUInt16() >> 8); break;
-
-                        case Property.SINGLE_X: x = bReader.ReadSingle(); break;
-                        case Property.SINGLE_Y: y = bReader.ReadSingle(); break;
-                        case Property.SINGLE_Z: z = bReader.ReadSingle(); break;
-
-                        case Property.DOUBLE_X: x = (float)bReader.ReadDouble(); break;
-                        case Property.DOUBLE_Y: y = (float)bReader.ReadDouble(); break;
-                        case Property.DOUBLE_Z: z = (float)bReader.ReadDouble(); break;
-
-                        case Property.DATA_8: bReader.ReadByte(); break;
-                        case Property.DATA_16: bReader.ReadUInt16(); break;
-                        case Property.DATA_32: bReader.ReadSingle(); break;
-                        case Property.DATA_64: bReader.ReadDouble(); break;
-                    }
+                    case Property.DATA_8: bReader.ReadByte(); break;
+                    case Property.DATA_16: bReader.ReadUInt16(); break;
+                    case Property.DATA_32: bReader.ReadSingle(); break;
+                    case Property.DATA_64: bReader.ReadDouble(); break;
                 }
-
-                target[i] = new Vector4(x, y, z, ((r << 24) | (g << 16) | (b << 8) | a));
-                Debug.Log("point " + i);
-                Debug.Log(target[i]);
             }
 
-            return result;
+            return new Vector4(x, y, z, ((r << 24) | (g << 16) | (b << 8) | a));
+
         }
 
-        bool ReadPointsBBE(int pointCount, Vector4[] target) {
-            return false;
+        Vector4 ReadPointBBE() {                               
+            throw new NotImplementedException();
+        }
+
+        int CalculateLineBytes() {
+            int count = 0;
+            foreach (Property prop in properties) {
+                switch (prop) {
+                    case Property.R8: case Property.G8: case Property.B8: case Property.A8: case Property.DATA_8: count += 1; break;
+                    case Property.R16: case Property.G16: case Property.B16: case Property.A16: case Property.DATA_16: count += 2; break;
+                    case Property.SINGLE_X: case Property.SINGLE_Y: case Property.SINGLE_Z: case Property.DATA_32: count += 4; break;
+                    case Property.DOUBLE_X: case Property.DOUBLE_Y: case Property.DOUBLE_Z: case Property.DATA_64: count += 8; break;            
+                }
+            }
+
+            return count;
         }
     }
 
