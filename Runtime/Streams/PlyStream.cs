@@ -1,20 +1,12 @@
 using UnityEngine;
-using UnityEditor;
-#if UNITY_2020_2_OR_NEWER
-using UnityEditor.AssetImporters;
-#else
-using UnityEditor.Experimental.AssetImporters;
-#endif
 
 using System;
 using System.Collections.Generic;
 using System.IO;
 
 namespace FastPoints {
+    public class PlyStream : BaseStream {
 
-    [ScriptedImporter(1, "ply")]
-    class PlyImporter : BaseImporter {
-    
         enum Format {
             INVALID,
             BINARY_LITTLE_ENDIAN,
@@ -41,16 +33,9 @@ namespace FastPoints {
         BinaryReader bReader;
         List<Property> properties = null;
 
-
-        public override bool OpenStream() {
-            try {
-                stream = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-                sReader = new StreamReader(stream);
-                bReader = new BinaryReader(stream);
-                return true;
-            } catch (System.Exception e) {
-                return false;
-            }
+        public PlyStream(string filePath) : base(filePath) {
+            sReader = new StreamReader(stream);
+            bReader = new BinaryReader(stream);
         }
 
         public override bool ReadPoints(int pointCount, Vector4[] target) {
@@ -81,6 +66,7 @@ namespace FastPoints {
             }
         }
 
+        // Samples points over entire point cloud. Uses different streamreaders
         public override bool SamplePoints(int pointCount, Vector4[] target)
         {
             if (format == Format.INVALID)
@@ -303,5 +289,4 @@ namespace FastPoints {
             return count;
         }
     }
-
 }
