@@ -16,6 +16,9 @@ namespace FastPoints {
             data.handle = new PointCloudHandle(context.assetPath);
 
             data.Init();
+
+            context.AddObjectToAsset("data", data);
+            context.SetMainObject(data);
         }
     }
 }

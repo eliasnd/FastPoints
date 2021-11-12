@@ -36,9 +36,11 @@ namespace FastPoints {
         public PlyStream(string filePath) : base(filePath) {
             sReader = new StreamReader(stream);
             bReader = new BinaryReader(stream);
+
+            ReadHeader();
         }
 
-        public override bool ReadPoints(int pointCount, Vector4[] target) {
+        public override bool ReadPoints(int pointCount, Point[] target) {
             if (format == Format.INVALID)
                 ReadHeader();
 
@@ -67,7 +69,7 @@ namespace FastPoints {
         }
 
         // Samples points over entire point cloud. Uses different streamreaders
-        public override bool SamplePoints(int pointCount, Vector4[] target)
+        public override bool SamplePoints(int pointCount, Point[] target)
         {
             if (format == Format.INVALID)
                 ReadHeader();
@@ -200,7 +202,7 @@ namespace FastPoints {
             stream.Position = bodyOffset;
         } 
 
-        Vector4 ReadPointASCII() {
+        Point ReadPointASCII() {
             float x = 0, y = 0, z = 0;
             byte r = 255, g = 255, b = 255, a = 255;
 
@@ -232,11 +234,12 @@ namespace FastPoints {
                 }
             }
 
-            return new Vector4(x, y, z, ((r << 24) | (g << 16) | (b << 8) | a));
+            // return new Point(x, y, z, ((r << 24) | (g << 16) | (b << 8) | a));
+            return new Point(new Vector3(x, y, z), new Color(r / 255f, g / 255f, b / 255f, a / 255f));
 
         }
 
-        Vector4 ReadPointBLE() {
+        Point ReadPointBLE() {
             float x = 0, y = 0, z = 0;
             byte r = 255, g = 255, b = 255, a = 255;
 
@@ -267,11 +270,12 @@ namespace FastPoints {
                 }
             }
 
-            return new Vector4(x, y, z, ((r << 24) | (g << 16) | (b << 8) | a));
+            // return new Point(x, y, z, ((r << 24) | (g << 16) | (b << 8) | a));
+            return new Point(new Vector3(x, y, z), new Color(r / 255f, g / 255f, b / 255f, a / 255f));
 
         }
 
-        Vector4 ReadPointBBE() {                               
+        Point ReadPointBBE() {                               
             throw new NotImplementedException();
         }
 

@@ -9,11 +9,11 @@ namespace FastPoints {
         
         public LazStream(string path) : base(path) {}
 
-        public override bool ReadPoints(int pointCount, Vector4[] target) {
+        public override bool ReadPoints(int pointCount, Point[] target) {
             throw new NotImplementedException();
         }
 
-        public override bool SamplePoints(int pointCount, Vector4[] target) {
+        public override bool SamplePoints(int pointCount, Point[] target) {
             throw new NotImplementedException();
         }
     }

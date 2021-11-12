@@ -19,7 +19,7 @@ namespace FastPoints {
             stream = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.Read);
         }
 
-        public abstract bool ReadPoints(int pointCount, Vector4[] target);
-        public abstract bool SamplePoints(int pointCount, Vector4[] target);
+        public abstract bool ReadPoints(int pointCount, Point[] target);
+        public abstract bool SamplePoints(int pointCount, Point[] target);
     }
 }

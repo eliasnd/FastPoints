@@ -4,6 +4,8 @@ using System;
 using System.IO;
 
 namespace FastPoints {
+
+    [Serializable]
     public class PointCloudHandle {
         public enum FileType { PLY, LAS, LAZ };
         FileType type;
