@@ -17,12 +17,10 @@ namespace FastPoints {
 
             if (data.TreeGenerated) {
                 throw new NotImplementedException();
-            } else {
+            } else if (data.DecimatedGenerated) {
+
                 ComputeBuffer cb = new ComputeBuffer(data.decimatedCloud.Length, Marshal.SizeOf(new Point(0, 0, 0, 0)));
                 cb.SetData(data.decimatedCloud);
-
-                // Debug.Log(test[100].ToString());
-                // Debug.Log(data.decimatedCloud[100].ToString());
 
                 Material mat = new Material(Shader.Find("Custom/DefaultPoint"));
                 mat.hideFlags = HideFlags.DontSave;

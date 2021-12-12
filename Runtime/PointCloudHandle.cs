@@ -8,7 +8,9 @@ namespace FastPoints {
     [Serializable]
     public class PointCloudHandle {
         public enum FileType { PLY, LAS, LAZ };
+        [SerializeField]
         FileType type;
+        [SerializeField]
         string path;
 
         public PointCloudHandle(string path) {

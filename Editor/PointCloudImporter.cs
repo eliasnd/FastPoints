@@ -7,6 +7,7 @@ using UnityEditor.Experimental.AssetImporters;
 #endif
 
 using System;
+using System.Threading;
 
 namespace FastPoints {
     [ScriptedImporter(1, new string[] {"ply", "las", "laz"})]
@@ -14,9 +15,6 @@ namespace FastPoints {
         public override void OnImportAsset(AssetImportContext context) {
             PointCloudData data = ScriptableObject.CreateInstance<PointCloudData>();
             data.handle = new PointCloudHandle(context.assetPath);
-
-            data.Init();
-
             context.AddObjectToAsset("data", data);
             context.SetMainObject(data);
         }

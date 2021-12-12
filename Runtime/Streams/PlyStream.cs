@@ -1,4 +1,5 @@
 using UnityEngine;
+using Unity.Collections;
 
 using System;
 using System.Collections.Generic;
@@ -69,8 +70,7 @@ namespace FastPoints {
         }
 
         // Samples points over entire point cloud. Uses different streamreaders
-        public override bool SamplePoints(int pointCount, Point[] target)
-        {
+        public override bool SamplePoints(int pointCount, Point[] target) {
             if (format == Format.INVALID)
                 ReadHeader();
 

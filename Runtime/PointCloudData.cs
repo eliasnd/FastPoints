@@ -3,6 +3,8 @@ using UnityEngine;
 using System;
 using System.Collections.Generic;
 using System.Threading;
+using System.Threading.Tasks;
+using System.Collections.Concurrent;
 
 namespace FastPoints {
     public class PointCloudData : ScriptableObject {
@@ -16,50 +18,66 @@ namespace FastPoints {
         public int PointCount { get { return count; } }
 
         [SerializeField]
+        bool init = false;
+        public bool Init { get { return init; } }
+
+        [SerializeField]
+        bool decimatedGenerated = false;
+        public bool DecimatedGenerated { get { return decimatedGenerated; } }
+
+        [SerializeField]
         bool treeGenerated; // True if tree generation is complete; if not, Renderer uses decimated point cloud
         public bool TreeGenerated { get { return treeGenerated; } }
 
-        public void Init() {
+        public void Initialize() {
             int decimatedSize = 100000;
             decimatedCloud = new Point[decimatedSize];
 
-            BaseStream stream = handle.GetStream();
-            count = stream.PointCount;
-
-            // stream.SamplePoints(decimatedSize, decimatedCloud);
-            // stream.ReadPoints(decimatedSize, decimatedCloud);
-
-            Debug.Log(decimatedCloud[100].ToString());
-    
-            Thread decimateThread = new Thread(GetSparseCloud);
-            decimateThread.Start(new SparseCloudParams(stream, decimatedCloud));
+            count = handle.GetStream().PointCount;
+            init = true;
         }
 
-        static void GetSparseCloud(System.Object obj) {
-            SparseCloudParams threadParams;
+        public async Task PopulateSparseCloud() {
+            await Task.Run(() => {
+                handle.GetStream().SamplePoints(decimatedCloud.Length, decimatedCloud);
+            });
 
-            try {
-                threadParams = (SparseCloudParams)obj;
-            } catch (InvalidCastException) {
-                throw new ArgumentException();
-            }
-
-            threadParams.stream.SamplePoints(threadParams.target.Length, threadParams.target);
-
-            Debug.Log("Thread done!");
-            Point point = threadParams.target[threadParams.target.Length-1];
-            Debug.Log(point.ToString());
-        }
-    }
-
-    class SparseCloudParams {
-
-        public SparseCloudParams(BaseStream stream, Point[] target) {
-            this.stream = stream;
-            this.target = target;
+            decimatedGenerated = true;
         }
 
-        public BaseStream stream;
-        public Point[] target;
+        public async Task GenerateTree() {
+            int pointBatchSize = 10000;
+            ConcurrentQueue<Point[]> pointBatches = new ConcurrentQueue<Point[]>();
+
+            bool allPointsRead = false;
+
+            Thread t1 = new Thread(() => {
+                BaseStream stream = handle.GetStream();
+
+                for (int i = 0; i < count / pointBatchSize; i++) {
+                    Point[] batch = new Point[pointBatchSize];
+                    stream.ReadPoints(pointBatchSize, batch);
+                    pointBatches.Enqueue(batch);                    
+                }
+
+                Point[] lastBatch = new Point[count % pointBatchSize];
+                stream.ReadPoints(count % pointBatchSize, lastBatch);
+                pointBatches.Enqueue(lastBatch);
+
+                allPointsRead = true;
+            });
+
+            Thread t2 = new Thread(() => {
+                while (!allPointsRead || pointBatches.Count > 0) {
+                    Point[] batch;
+                    while (!pointBatches.TryDequeue(out batch)) {} // Dequeue point batch
+                    // TODO: Send to GPU
+                    Debug.Log(batch.Length);
+                }
+            });
+
+            t1.Start();
+            t2.Start();
+        }
     }
 }
