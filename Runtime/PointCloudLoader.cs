@@ -8,10 +8,16 @@ namespace FastPoints {
     [ExecuteInEditMode]
     class PointCloudLoader : MonoBehaviour {
         public PointCloudData data;
+        public ComputeShader countShader;
+        public ComputeShader sortShader;
+
         bool loading;
         float progress = 0.0f;
 
         public void Update() {
+            if (countShader == null || sortShader == null)
+                return;
+
             if (data == null && loading)
                 loading = false;
 
@@ -30,7 +36,7 @@ namespace FastPoints {
                 data.PopulateSparseCloud();
 
             if (!data.TreeGenerated)
-                data.GenerateTree();
+                data.GenerateTree(countShader, sortShader);
         }
         
     }

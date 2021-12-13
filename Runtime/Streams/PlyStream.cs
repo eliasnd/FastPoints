@@ -8,6 +8,9 @@ using System.IO;
 namespace FastPoints {
     public class PlyStream : BaseStream {
 
+        Vector3 currMinPoint;
+        Vector3 currMaxPoint;
+
         enum Format {
             INVALID,
             BINARY_LITTLE_ENDIAN,
@@ -38,6 +41,12 @@ namespace FastPoints {
             sReader = new StreamReader(stream);
             bReader = new BinaryReader(stream);
 
+            minPoint = new Vector3(1, 1, 1); // non-nullable, so just make bigger than maxpoint
+            maxPoint = new Vector3(0, 0, 0);
+
+            currMinPoint = new Vector3(float.MaxValue, float.MaxValue, float.MaxValue);
+            currMaxPoint = new Vector3(float.MinValue, float.MinValue, float.MinValue);
+
             ReadHeader();
         }
 
@@ -50,19 +59,48 @@ namespace FastPoints {
             if (!result)
                 pointCount = count - index;
 
+            index += pointCount;
+
 
             switch (format) {
                 case Format.BINARY_LITTLE_ENDIAN:
-                    for (int i = 0; i < pointCount; i++)
+                    for (int i = 0; i < pointCount; i++) {
                         target[i] = ReadPointBLE();
+                        currMinPoint = Vector3.Min(currMinPoint, target[i].pos);
+                        currMaxPoint = Vector3.Max(currMaxPoint, target[i].pos);
+                    }
+                    
+                    if (index == count) {
+                        minPoint = currMinPoint;
+                        maxPoint = currMaxPoint;
+                    }
+
                     return true;
                 case Format.BINARY_BIG_ENDIAN:
-                    for (int i = 0; i < pointCount; i++)
+                    for (int i = 0; i < pointCount; i++) {
                         target[i] = ReadPointBBE();
+                        currMinPoint = Vector3.Min(currMinPoint, target[i].pos);
+                        currMaxPoint = Vector3.Max(currMaxPoint, target[i].pos);
+                    }
+
+                    if (index == count) {
+                        minPoint = currMinPoint;
+                        maxPoint = currMaxPoint;
+                    }
+
                     return true;
                 case Format.ASCII:
-                    for (int i = 0; i < pointCount; i++)
+                    for (int i = 0; i < pointCount; i++) {
                         target[i] = ReadPointASCII();
+                        currMinPoint = Vector3.Min(currMinPoint, target[i].pos);
+                        currMaxPoint = Vector3.Max(currMaxPoint, target[i].pos);
+                    }
+
+                    if (index == count) {
+                        minPoint = currMinPoint;
+                        maxPoint = currMaxPoint;
+                    }
+
                     return true;
                 default:
                     return false;
@@ -84,7 +122,7 @@ namespace FastPoints {
                 case Format.BINARY_LITTLE_ENDIAN:
                     lineLength = CalculateLineBytes(); 
                     for (int i = 0; i < pointCount; i++) {
-                        target[index] = ReadPointBLE();
+                        target[i] = ReadPointBLE();
                         bReader.ReadBytes(lineLength);
                     }
                     return true;
@@ -98,7 +136,7 @@ namespace FastPoints {
                 case Format.BINARY_BIG_ENDIAN:
                     lineLength = CalculateLineBytes(); 
                     for (int i = 0; i < pointCount; i++) {
-                        target[index] = ReadPointBBE();
+                        target[i] = ReadPointBBE();
                         bReader.ReadBytes(lineLength);
                     }
                     return true;

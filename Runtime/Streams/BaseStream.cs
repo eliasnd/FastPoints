@@ -15,6 +15,12 @@ namespace FastPoints {
         protected int index;
         public int PointIndex { get { return index; } }
 
+        // Min and max points for bounding box
+        protected Vector3 minPoint;
+        public Vector3 MinPoint { get { return minPoint; } }
+        protected Vector3 maxPoint;
+        public Vector3 MaxPoint { get { return maxPoint; } }
+
         public BaseStream(string filePath) {
             path = filePath;
             stream = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.Read);

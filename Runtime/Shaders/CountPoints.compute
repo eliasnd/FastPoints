@@ -1,0 +1,50 @@
+#pragma kernel CountPoints 
+
+#define GROUP_SIZE_X 8
+#define GROUP_SIZE_Y 8 
+#define GROUP_SIZE_Z 1
+
+struct Point {
+    float3 pos;
+    half4 col;
+};
+
+RWTexture3D<uint> _Counts;  // Node counts, ordered lexicographically by xyz
+uint _ChunkCount; // Number of chunks along each axis, total number of chunks = chunkCount^3
+StructuredBuffer<Point> _Points;
+uint _PointCount;
+uint _ThreadBudget; // How many points each thread should process
+
+// Stores [a, b] range of bounding box used to determine subbox
+float3 _MinPoint;
+float3 _MaxPoint;
+
+float InvLerp(float low, float high, float val) {
+    return (val - low) / (high - low);
+}
+
+[numthreads(GROUP_SIZE_X, GROUP_SIZE_Y, GROUP_SIZE_Z)]
+void CountPoints(uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex) {
+    uint gsize = GROUP_SIZE_X * GROUP_SIZE_Y * GROUP_SIZE_Z;
+    uint idx = gid.x * gsize + gidx; // Get unique integer from gid and gidx
+    idx *= _ThreadBudget;
+
+    for (uint i = 0; i < _ThreadBudget; i++) {
+        if (idx >= _PointCount) // Return if outside of batch size
+            return;
+
+        Point pt = _Points[idx];
+        float threshold = 1 / _ChunkCount; // Used to calculate which index for each dimension
+
+        InterlockedAdd(
+            _Counts[float3(
+                floor(InvLerp(_MinPoint.x, _MaxPoint.x, pt.pos.x) / threshold),
+                floor(InvLerp(_MinPoint.y, _MaxPoint.y, pt.pos.y) / threshold),
+                floor(InvLerp(_MinPoint.z, _MaxPoint.z, pt.pos.z) / threshold)
+            )], 1
+        );
+
+        idx++;
+    }
+
+}
