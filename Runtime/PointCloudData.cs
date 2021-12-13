@@ -17,6 +17,12 @@ namespace FastPoints {
         [SerializeField]
         int count;
         public int PointCount { get { return count; } }
+        [SerializeField]
+        Vector3 minPoint;
+        public Vector3 MinPoint { get { return minPoint; } }
+        [SerializeField]
+        Vector3 maxPoint;
+        public Vector3 MaxPoint { get { return maxPoint; } }
 
         [SerializeField]
         bool init = false;
@@ -34,7 +40,12 @@ namespace FastPoints {
             int decimatedSize = 100000;
             decimatedCloud = new Point[decimatedSize];
 
-            count = handle.GetStream().PointCount;
+            BaseStream stream = handle.GetStream();
+            count = stream.PointCount;
+
+            // PLY no header needs lazy init of bounds
+            minPoint = stream.MinPoint;
+            maxPoint = stream.MaxPoint;
             init = true;
         }
 
@@ -44,6 +55,27 @@ namespace FastPoints {
             });
 
             decimatedGenerated = true;
+        }
+
+        public async Task LoadPointBatches(int batchSize, ConcurrentQueue<Point[]> batches) {
+            BaseStream stream = handle.GetStream();
+
+            await Task.Run(() => {
+                for (int i = 0; i < count / batchSize; i++) {
+                    Point[] batch = new Point[batchSize];
+                    stream.ReadPoints(batchSize, batch);
+                    batches.Enqueue(batch);                    
+                    UnityEngine.Debug.Log("Queued " + batchSize + " points");
+                }
+
+                Point[] lastBatch = new Point[count % batchSize];
+                stream.ReadPoints(count % batchSize, lastBatch);
+                batches.Enqueue(lastBatch);
+                UnityEngine.Debug.Log("Queued " + (count % batchSize) + " points");
+            } );
+
+            minPoint = stream.MinPoint;
+            maxPoint = stream.MaxPoint;
         }
 
         public async Task GenerateTree(ComputeShader countShader, ComputeShader sortShader) {
