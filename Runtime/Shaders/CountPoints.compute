@@ -26,19 +26,9 @@ float InvLerp(float low, float high, float val) {
 
 [numthreads(GROUP_SIZE_X, GROUP_SIZE_Y, GROUP_SIZE_Z)]
 void CountPoints(uint3 dtidx : SV_DispatchThreadID) {
-// void CountPoints(uint3 gid : SV_GroupID, uint gidx : SV_GroupIndex) {
-    // uint gsize = GROUP_SIZE_X * GROUP_SIZE_Y * GROUP_SIZE_Z;
-    // uint idx = gid.x * gsize + gidx; // Get unique integer from gid and gidx
     uint idx = dtidx.x * _ThreadBudget;
 
     float threshold = 1.0 / _ChunkCount; // Used to calculate which index for each dimension
-    // Point pt = _Points[idx];
-    // InterlockedAdd(_Counts[(int)idx], 
-    //     _ChunkCount * _ChunkCount * floor(InvLerp(_MinPoint.x, _MaxPoint.x, pt.pos.x) / threshold) +
-    //     _ChunkCount * floor(InvLerp(_MinPoint.y, _MaxPoint.y, pt.pos.y) / threshold) +
-    //     floor(InvLerp(_MinPoint.z, _MaxPoint.z, pt.pos.z) / threshold)    
-    // );
-    // InterlockedAdd(_Counts[(int)(idx+1)], (int)(pt.pos.z * 100));
 
     for (uint i = 0; i < _ThreadBudget; i++) {
         if (idx >= _BatchSize) // Return if outside of batch size

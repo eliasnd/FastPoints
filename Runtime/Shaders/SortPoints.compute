@@ -1,0 +1,50 @@
+#pragma kernel SortPoints 
+
+#define GROUP_SIZE_X 64
+#define GROUP_SIZE_Y 1 
+#define GROUP_SIZE_Z 1
+
+struct Point {
+    float3 pos;
+    half4 col;
+};
+
+RWStructuredBuffer<uint> _Counts;
+StructuredBuffer<uint> _ChunkLookupTable;
+uint _ChunkCount; // Number of chunks along each axis, total number of chunks = chunkCount^3
+StructuredBuffer<Point> _Points;
+uint _BatchSize;
+uint _ThreadBudget; // How many points each thread should process
+
+// Stores [a, b] range of bounding box used to determine subbox
+float3 _MinPoint;
+float3 _MaxPoint;
+
+float InvLerp(float low, float high, float val) {
+    return (val - low) / (high - low);
+}
+
+[numthreads(GROUP_SIZE_X, GROUP_SIZE_Y, GROUP_SIZE_Z)]
+void CountPoints(uint3 dtidx : SV_DispatchThreadID) {
+    uint idx = dtidx.x * _ThreadBudget;
+
+    float threshold = 1.0 / _ChunkCount; // Used to calculate which index for each dimension
+
+    for (uint i = 0; i < _ThreadBudget; i++) {
+        if (idx >= _BatchSize) // Return if outside of batch size
+            break;
+
+        Point pt = _Points[idx];
+
+        // Index into buffer
+        uint chunkIdx =
+            _ChunkCount * _ChunkCount * floor(InvLerp(_MinPoint.x, _MaxPoint.x, pt.pos.x) / threshold) +
+            _ChunkCount * floor(InvLerp(_MinPoint.y, _MaxPoint.y, pt.pos.y) / threshold) +
+            floor(InvLerp(_MinPoint.z, _MaxPoint.z, pt.pos.z) / threshold);
+        
+        InterlockedAdd(_Counts[chunkIdx], 1);
+
+        idx++;
+    }
+
+}
