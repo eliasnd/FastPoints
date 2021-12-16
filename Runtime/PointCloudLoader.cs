@@ -22,9 +22,11 @@ namespace FastPoints {
         
         // Parameters for chunking
         int chunkCount = 128; // Number of chunks per axis, total chunks = chunkCount^3
-        RenderTexture counts; // Counts for chunking
+        // RenderTexture counts; // Counts for chunking
+        ComputeBuffer countBuffer; // Counts for chunking, flattened
+        uint[] counts;
         bool boundsPopulated = false;
-        int pointsCounted;
+        uint pointsCounted = 0;
         bool writing; // Whether data has started writing to file
         float progress = 0.0f;
         Queue<Point[]> countedBatches;
@@ -34,6 +36,7 @@ namespace FastPoints {
                 loading = false;
                 reading = false;
                 writing = false;
+                pointsCounted = 0;
                 boundsPopulated = false;
                 return;
             }
@@ -50,17 +53,19 @@ namespace FastPoints {
                 countedBatches = new Queue<Point[]>();
 
                 // Initialize counting shader
-                counts = new RenderTexture(chunkCount, chunkCount, 0, RenderTextureFormat.R16);
-                counts.enableRandomWrite = true;
-                counts.dimension = UnityEngine.Rendering.TextureDimension.Tex3D;
-                counts.volumeDepth = chunkCount;
-                counts.Create();
+                // counts = new RenderTexture(chunkCount, chunkCount, 0, RenderTextureFormat.R16);
+                // counts.enableRandomWrite = true;
+                // counts.dimension = UnityEngine.Rendering.TextureDimension.Tex3D;
+                // counts.volumeDepth = chunkCount;
+                // counts.Create();
+                // Use compute buffer instead
+                countBuffer = new ComputeBuffer(chunkCount * chunkCount * chunkCount, sizeof(UInt32));
+                counts = new uint[chunkCount * chunkCount * chunkCount];
 
                 int countHandle = countShader.FindKernel("CountPoints"); // Initialize count shader
-                countShader.SetTexture(countHandle, "_Counts", counts);
+                countShader.SetBuffer(countHandle, "_Counts", countBuffer);
                 countShader.SetInt("_ChunkCount", chunkCount);
-                countShader.SetInt("_PointCount", data.PointCount);
-                countShader.SetInt("_ThreadBudget", 1);
+                countShader.SetInt("_ThreadBudget", Mathf.CeilToInt(batchSize / 4096f));
 
                 // TODO: Initialize sorting shader
                 
@@ -95,16 +100,62 @@ namespace FastPoints {
 
                 int countHandle = countShader.FindKernel("CountPoints");
                 countShader.SetBuffer(countHandle, "_Points", batchBuffer);
-                countShader.DispatchIndirect(countHandle, 8, 8, 8);
+                countShader.SetInt("_BatchSize", batch.Length);
+                countShader.Dispatch(countHandle, 64, 1, 1);
 
                 batchBuffer.Dispose();
 
                 countedBatches.Enqueue(batch);
-                pointsCounted += batch.Length;
+                pointsCounted += (uint)batch.Length;
                 UnityEngine.Debug.Log("Counted total of " + pointsCounted + " points");
 
-                if (pointsCounted == data.PointCount)
+                if (pointsCounted == 20000) {
+                    countBuffer.GetData(counts);
+                    Debug.Log("First Count: " + counts[0]);
+                    Debug.Log("Second Count: " + counts[1]);
+                }
+                if (pointsCounted == data.PointCount) {
+                    reading = false;
+                    writing = true;
+                    countBuffer.GetData(counts);
                     Debug.Log("Done counting");
+                }
+            }
+
+            if (writing) {
+                int sum = 0;
+                for (int i = 0; i < chunkCount * chunkCount * chunkCount; i++)
+                    sum += (int)counts[i];
+                Debug.Log("Total points counted: " + sum);
+                if (countedBatches.Count == 0) {
+                    writing = false;
+                    return;
+                }
+
+                Point[] batch = countedBatches.Dequeue();
+            }
+        }
+
+        public void OnRenderObject() {
+            if (data == null)
+                return;
+
+            if (data.TreeGenerated) {
+                throw new NotImplementedException();
+            } else if (data.DecimatedGenerated) {
+
+                ComputeBuffer cb = new ComputeBuffer(data.decimatedCloud.Length, System.Runtime.InteropServices.Marshal.SizeOf<Point>());
+                cb.SetData(data.decimatedCloud);
+
+                Material mat = new Material(Shader.Find("Custom/DefaultPoint"));
+                mat.hideFlags = HideFlags.DontSave;
+                mat.SetBuffer("_PointBuffer", cb);
+                mat.SetPass(0);
+                mat.SetMatrix("_Transform", transform.localToWorldMatrix);
+
+                Graphics.DrawProceduralNow(MeshTopology.Points, data.PointCount, 1);
+
+                cb.Dispose();
             }
         }
 
