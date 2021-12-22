@@ -14,10 +14,13 @@ namespace FastPoints {
 
         #region public
         public PointCloudData data;
-        public ComputeShader countShader;
-        public ComputeShader sortShader;
-
+        public bool generateTree = false;
+        public int decimatedCloudSize = 250000;
+        public float pointSize = 0.05f;
         #endregion
+
+        ComputeShader countShader;
+        ComputeShader sortShader;
 
         #region checkpoints
 
@@ -43,6 +46,12 @@ namespace FastPoints {
         uint pointsCounted = 0;
         float progress = 0.0f;
         Queue<Point[]> countedBatches;
+
+        public void Start() {
+            // Load compute shaders
+                countShader = (ComputeShader)Resources.Load("CountPoints");
+                sortShader = (ComputeShader)Resources.Load("SortPoints");
+        }
 
         public void Update() {
             if (data == null) {
@@ -86,6 +95,8 @@ namespace FastPoints {
                 // TODO: Initialize sorting shader
                 
                 // Start loading point cloud
+
+                Debug.Log("Done!");
 
                 LoadPointCloud();
 
@@ -167,10 +178,11 @@ namespace FastPoints {
                 Material mat = new Material(Shader.Find("Custom/DefaultPoint"));
                 mat.hideFlags = HideFlags.DontSave;
                 mat.SetBuffer("_PointBuffer", cb);
-                mat.SetPass(0);
+                mat.SetFloat("_PointSize", pointSize);
                 mat.SetMatrix("_Transform", transform.localToWorldMatrix);
+                mat.SetPass(0);
 
-                Graphics.DrawProceduralNow(MeshTopology.Points, data.PointCount, 1);
+                Graphics.DrawProceduralNow(MeshTopology.Points, decimatedCloudSize, 1);
 
                 cb.Dispose();
             }
@@ -185,11 +197,17 @@ namespace FastPoints {
             if (!data.Init)
                 data.Initialize();
 
-            if (!data.DecimatedGenerated)
-                data.PopulateSparseCloud();
+            Debug.Log("Init");
 
-            if (!data.TreeGenerated)
-                GenerateTree();
+            if (!data.DecimatedGenerated)
+                data.PopulateSparseCloud(decimatedCloudSize);
+
+            Debug.Log("Populated");
+
+            // Debug.Log(generateTree);
+
+            // if (!data.TreeGenerated && generateTree)
+            //     GenerateTree();
 
             return false;
         }

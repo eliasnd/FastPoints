@@ -123,10 +123,10 @@ namespace FastPoints {
                     lineLength = CalculateLineBytes(); 
                     for (int i = 0; i < pointCount; i++) {
                         target[i] = ReadPointBLE();
-                        bReader.ReadBytes(lineLength);
+                        stream.Seek(lineLength * (interval - 1), SeekOrigin.Current);
                     }
                     return true;
-                case Format.ASCII:
+                case Format.ASCII: // Can't use stream.Seek with ASCII since lines aren't equal length
                     for (int i = 0; i < pointCount; i++) {
                         target[i] = ReadPointASCII();
                         for (int j = 0; j < interval-1; j++) 
@@ -137,7 +137,7 @@ namespace FastPoints {
                     lineLength = CalculateLineBytes(); 
                     for (int i = 0; i < pointCount; i++) {
                         target[i] = ReadPointBBE();
-                        bReader.ReadBytes(lineLength);
+                        stream.Seek(lineLength * (interval - 1), SeekOrigin.Current);
                     }
                     return true;
             }

@@ -37,9 +37,6 @@ namespace FastPoints {
         public bool TreeGenerated { get { return treeGenerated; } }
 
         public void Initialize() {
-            int decimatedSize = 100000;
-            decimatedCloud = new Point[decimatedSize];
-
             BaseStream stream = handle.GetStream();
             count = stream.PointCount;
 
@@ -49,12 +46,18 @@ namespace FastPoints {
             init = true;
         }
 
-        public async Task PopulateSparseCloud() {
+        public async Task PopulateSparseCloud(int size = 250000) {
+            Stopwatch watch = new Stopwatch();
+            watch.Start();
+            decimatedCloud = new Point[size];
+            
             await Task.Run(() => {
                 handle.GetStream().SamplePoints(decimatedCloud.Length, decimatedCloud);
             });
 
             decimatedGenerated = true;
+            watch.Stop();
+            UnityEngine.Debug.Log($"Decimated cloud loaded in {watch.ElapsedMilliseconds} ms");
         }
 
         public async Task LoadPointBatches(int batchSize, ConcurrentQueue<Point[]> batches) {
