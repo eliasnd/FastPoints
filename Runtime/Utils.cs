@@ -27,7 +27,6 @@ namespace FastPoints {
 
         public string ToString() {
             return "Position: " + pos.ToString() + ", Color: " + col.ToString();// Utils.IntToColor(col).ToString();
-
         }
     }
 

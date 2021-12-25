@@ -10,22 +10,23 @@ namespace FastPoints {
     // Helper class for reading and writing octrees
     public static class OctreeIO {
         static int headerBytes = 0; // TODO: Number of bytes in ply file header System.Text.ASCIIEncoding.ASCII.GetByteCount
-        static int pointBytes = Marshal.SizeOf<Point>();    // Number of bytes per point - should be 12 for position + 3 for color = 15(?)
+        static int pointBytes = 15; // Marshal.SizeOf<Point>();    // Number of bytes per point - should be 12 for position + 3 for color = 15(?)
 
         // Creates leaf node file
         public static async void CreateLeafFile(uint pointCount, string root = "") {
             String path = root != "" ? $"{root}/leaf_nodes.ply" : $"leaf_nodes.ply";
             String header = $@"ply
-            format binary_little_endian 1.0
-            element vertex {pointCount}
-            property float x
-            property float y
-            property float z
-            property uchar red
-            property uchar green
-            property uchar blue
-            end_header
-            ";
+format binary_little_endian 1.0
+element vertex {pointCount}
+property float x
+property float y
+property float z
+property uchar red
+property uchar green
+property uchar blue
+end_header
+";
+            headerBytes = System.Text.ASCIIEncoding.ASCII.GetByteCount(header);
             System.IO.File.WriteAllText(path, header);
         }
 
@@ -35,7 +36,7 @@ namespace FastPoints {
         //  sorted - node index of each point
         //  nodeOffsets - total number of points before each node starts
         //  nodeIndices - current index in each node
-        public static async void WriteLeafNodes(Point[] points, uint[] sorted, uint[] nodeOffsets, int[] nodeIndices, string root = "") {
+        public static async Task WriteLeafNodes(Point[] points, uint[] sorted, uint[] nodeOffsets, int[] nodeIndices, string root = "", int[] countWrapper = null) {
             await Task.Run(() => {
                 // Convert to dictionary
                 Dictionary<uint, List<Point>> nodes = new Dictionary<uint, List<Point>>();
@@ -44,6 +45,12 @@ namespace FastPoints {
                         nodes.Add(sorted[i], new List<Point>());
                     nodes[sorted[i]].Add(points[i]);
                 }
+
+                int pointSum = 0;
+                foreach (List<Point> node in nodes.Values)
+                    pointSum += node.Count;
+                // if (points.Length != pointSum)
+                    // throw new Exception($"Dictionary has {pointSum} points, array has {points.Length}");
 
                 // Write points
 
@@ -59,6 +66,9 @@ namespace FastPoints {
                         byte[] x_bytes = BitConverter.GetBytes(pt.pos.x);
                         byte[] y_bytes = BitConverter.GetBytes(pt.pos.y);
                         byte[] z_bytes = BitConverter.GetBytes(pt.pos.z);
+
+                        if (x_bytes.Length != 4 || y_bytes.Length != 4 || z_bytes.Length != 4)
+                            throw new Exception("Wrong number of bytes from floats");
                         bytes.AddRange(new byte[] { 
                             x_bytes[0], x_bytes[1], x_bytes[2], x_bytes[3],
                             y_bytes[0], y_bytes[1], y_bytes[2], y_bytes[3],
@@ -67,13 +77,18 @@ namespace FastPoints {
                             Convert.ToByte((int)(pt.col.g * 255.0f)),
                             Convert.ToByte((int)(pt.col.b * 255.0f)),
                         });
+
+                        // if (bytes.Count != pointBytes)
+                            // throw new Exception($"Byte size {bytes.Count}, expected size {pointBytes}");
                     }
                     stream.Seek(headerBytes + (nodeOffsets[node.Key] + startIdx) * pointBytes, SeekOrigin.Begin);
                     bw.Write(bytes.ToArray(), 0, bytes.Count);
                 }
                 bw.Dispose();
+
+                if (countWrapper != null)
+                    Interlocked.Add(ref countWrapper[0], points.Length);
             });
-            
         }
     }
 }

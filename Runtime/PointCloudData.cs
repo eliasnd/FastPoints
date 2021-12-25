@@ -7,6 +7,8 @@ using System.Threading.Tasks;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 
+using Debug = UnityEngine.Debug;
+
 namespace FastPoints {
     public class PointCloudData : ScriptableObject {
         
@@ -50,6 +52,7 @@ namespace FastPoints {
             Stopwatch watch = new Stopwatch();
             watch.Start();
             decimatedCloud = new Point[size];
+            Debug.Log(decimatedCloud.Length);
             
             await handle.GetStream().SamplePoints(decimatedCloud.Length, decimatedCloud);
             
@@ -87,16 +90,20 @@ namespace FastPoints {
                     BaseStream scanStream = handle.GetStream();
 
                     Point[] batch = new Point[batchSize];
-                    for (int i = 0; i < count / batchSize; i++)
+                    for (int i = 0; i < count / batchSize; i++) {
                         scanStream.ReadPoints(batchSize, batch);
+                        Debug.Log($"Scanning batch {i+1}/{(int)(count / batchSize)}");
+                    }
 
                     batch = new Point[count % batchSize];
                     scanStream.ReadPoints(count % batchSize, batch);
 
+                    Debug.Log($"Scanning batch {(int)(count / batchSize)}/{(int)(count / batchSize)}");
+
                     minPoint = scanStream.MinPoint;
                     maxPoint = scanStream.MaxPoint;
 
-                    // UnityEngine.Debug.Log($"Preliminarily populated bounds {minPoint.ToString()}, {maxPoint.ToString()}");
+                    Debug.Log($"Preliminarily populated bounds {minPoint.ToString()}, {maxPoint.ToString()}");
                 }
             });
 

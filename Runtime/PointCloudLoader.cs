@@ -7,6 +7,9 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
+
+using Debug = UnityEngine.Debug;
 
 namespace FastPoints {
     [ExecuteInEditMode]
@@ -28,13 +31,14 @@ namespace FastPoints {
 
         #region checkpoints
         public enum Phase { NONE, WAITING, READING, COUNTING, SORTING, WRITING, DONE }
+        [SerializeField]
         Phase currPhase;
         public Phase CurrPhase { get { return currPhase; } }
 
         #endregion
 
         // Parameters for reading
-        int batchSize = 100000;
+        public int batchSize = 100000;
         ConcurrentQueue<Point[]> pointBatches;
         
         // Parameters for sorting
@@ -42,9 +46,15 @@ namespace FastPoints {
         ComputeBuffer sortBuffer; // Buffer for point chunk indices
         ComputeBuffer countBuffer;  // Counts for each chunk
         uint[] nodeOffsets;
+        [SerializeField]
         uint pointsCounted = 0;
+        [SerializeField]
         uint pointsSorted = 0;
+        [SerializeField]
+        uint pointsWritten = 0;
         ConcurrentQueue<(Point[], uint[])> sortedBatches;
+
+        Stopwatch watch;
 
         public void Start() {
             // Load compute shader
@@ -70,7 +80,7 @@ namespace FastPoints {
                 if (!data.Init)
                     data.Initialize();
 
-                if (!data.DecimatedGenerated)
+                if (!data.DecimatedGenerated || data.decimatedCloud.Length != decimatedCloudSize)
                     data.PopulateSparseCloud(decimatedCloudSize);
 
                 if (!data.TreeGenerated && generateTree) {
@@ -92,6 +102,7 @@ namespace FastPoints {
                     countShader.SetFloats("_MaxPoint", new float[] { data.MaxPoint.x, data.MaxPoint.y, data.MaxPoint.z });
                     sortShader.SetFloats("_MinPoint", new float[] { data.MinPoint.x, data.MinPoint.y, data.MinPoint.z });
                     sortShader.SetFloats("_MaxPoint", new float[] { data.MaxPoint.x, data.MaxPoint.y, data.MaxPoint.z });
+                    Debug.Log($"[{watch.Elapsed.ToString()}]: Reading done");
                     currPhase = Phase.COUNTING;
                 }
             }
@@ -112,7 +123,7 @@ namespace FastPoints {
 
                 pointsCounted += (uint)batch.Length;
 
-                Debug.Log($"Counted total of {pointsCounted} points");
+                // Debug.Log($"Counted total of {pointsCounted} points");
 
                 batchBuffer.Release();
 
@@ -121,11 +132,15 @@ namespace FastPoints {
                     data.LoadPointBatches(batchSize, pointBatches, false);  // pointBatches now empty, but don't need to repopulate bounds
                     uint[] chunkCounts = new uint[chunkCount * chunkCount * chunkCount];
                     countBuffer.GetData(chunkCounts);
-                    ComputeChunkOffsets(chunkCounts);
+                    TimeSpan currTime = watch.Elapsed;
+                    Debug.Log($"[{currTime.ToString()}]: Counting done");
+                    WritePoints(chunkCounts);
+                    // ComputeChunkOffsets(chunkCounts);
                 }
             }
 
             if (currPhase == Phase.SORTING) {
+
                 if (sortedBatches.Count >= maxQueued)   // Wait until space in sorted queue
                     return;
 
@@ -147,9 +162,9 @@ namespace FastPoints {
                 batchBuffer.Dispose();
 
                 uint[] sortedIndices = new uint[batch.Length];
-                sortBuffer.GetData(sortedIndices);
+                sortedBuffer.GetData(sortedIndices);
                 pointsSorted += (uint)batch.Length;
-                UnityEngine.Debug.Log("Sorted total of " + pointsSorted + " points");
+                // UnityEngine.Debug.Log("Sorted total of " + pointsSorted + " points");
 
                 sortedBatches.Enqueue((batch, sortedIndices));
 
@@ -157,20 +172,22 @@ namespace FastPoints {
                 sortedBuffer.Release();
 
                 if (pointsSorted == data.PointCount) {
+                    Debug.Log($"[{watch.Elapsed.ToString()}]: Sorting done");
                     currPhase = Phase.WRITING;
-                    UnityEngine.Debug.Log("Done sorting");
                 }
             }
 
             if (currPhase == Phase.DONE) {
+                watch.Stop();
+                Debug.Log($"[{watch.Elapsed.ToString()}]: Writing done");
                 // TODO: Write to pointclouddata
-            } else
-                EditorApplication.QueuePlayerLoopUpdate();  // Needed to run update without scene changes
+            }
         }
 
         public void Initialize() {
             // Initialize batch queue
-            pointBatches = new ConcurrentQueue<Point[]>();            
+            pointBatches = new ConcurrentQueue<Point[]>();    
+            sortedBatches = new ConcurrentQueue<(Point[], uint[])>();        
 
             // Number of points each compute shader thread should process
             // 64 thread groups * 64 threads per group = 4096 threads
@@ -189,6 +206,21 @@ namespace FastPoints {
             int sortHandle = sortShader.FindKernel("SortPoints"); // Initialize count shader
             sortShader.SetInt("_ChunkCount", chunkCount);
             sortShader.SetInt("_ThreadBudget", threadBudget);
+
+            watch = new Stopwatch();
+            watch.Start();
+            Debug.Log($"[{watch.Elapsed.ToString()}]: Starting");
+        }
+
+        public void OnDrawGizmos() {
+        #if UNITY_EDITOR
+            // Ensure continuous Update calls.
+            if (!Application.isPlaying)
+            {
+                UnityEditor.EditorApplication.QueuePlayerLoopUpdate();
+                UnityEditor.SceneView.RepaintAll();
+            }
+        #endif
         }
 
         public void OnRenderObject() {
@@ -226,19 +258,52 @@ namespace FastPoints {
 
             });
             
-            Debug.Log("Starting sorting...");
+            Debug.Log($"[{watch.Elapsed.ToString()}]: Chunk offsets done");
             currPhase = Phase.SORTING;
+            // WritePoints();  // Starts writing point
         }
         
-        async void WritePoints() {
+        async void WritePoints(uint[] chunkCounts) {
             await Task.Run(() => {
-                OctreeIO.CreateLeafFile((uint)data.PointCount, "");
+                nodeOffsets = new uint[chunkCount * chunkCount * chunkCount];
+                nodeOffsets[0] = 0;
+                for (int i = 1; i < chunkCount * chunkCount * chunkCount; i++)
+                    nodeOffsets[i] = nodeOffsets[i-1] + chunkCounts[i-1];
+
+                currPhase = Phase.SORTING;
+
+                List<Task> tasks = new List<Task>();
+                int maxTasks = 100;
+
+                OctreeIO.CreateLeafFile((uint)data.PointCount, "Assets");
                 int[] nodeIndices = new int[chunkCount * chunkCount * chunkCount];
 
+                int[] countWrapper = new int[] { (int)pointsWritten };
+
                 while (currPhase == Phase.SORTING || sortedBatches.Count > 0) {
+                    if (tasks.Count == maxTasks) {
+                        int t = Task.WaitAny(tasks.ToArray());
+                        tasks.RemoveAt(t);
+                    } 
+
                     (Point[], uint[]) batch;
                     while (!sortedBatches.TryDequeue(out batch)) {}
-                    OctreeIO.WriteLeafNodes(batch.Item1, batch.Item2, nodeOffsets, nodeIndices, "");
+                    tasks.Add(OctreeIO.WriteLeafNodes(batch.Item1, batch.Item2, nodeOffsets, nodeIndices, "Assets", countWrapper));
+                    pointsWritten = (uint)countWrapper[0];
+
+                    if (currPhase != Phase.SORTING)
+                        Debug.Log($"{sortedBatches.Count} batches left to count...");
+
+                    Debug.Log($"Loop status: {currPhase == Phase.SORTING} || count {sortedBatches.Count} > 0");
+                }
+
+                Debug.Log($"Here {tasks.Count}");
+
+                while (tasks.Count > 0) {
+                    Debug.Log("Still going...");
+                    int t = Task.WaitAny(tasks.ToArray());
+                    tasks.RemoveAt(t);
+                    pointsWritten = (uint)countWrapper[0];
                 }
             });
 
