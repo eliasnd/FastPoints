@@ -3,6 +3,7 @@ using Unity.Collections;
 
 using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using System.IO;
 
 namespace FastPoints {
@@ -14,7 +15,7 @@ namespace FastPoints {
             throw new NotImplementedException();
         }
 
-        public override bool SamplePoints(int pointCount, Point[] target) {
+        public override async Task SamplePoints(int pointCount, Point[] target) {
             throw new NotImplementedException();
         }
     }

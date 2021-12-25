@@ -2,7 +2,10 @@ using UnityEngine;
 using Unity.Collections;
 
 using System;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Collections.Generic;
+using System.Collections.Concurrent;
 using System.IO;
 
 namespace FastPoints {
@@ -108,7 +111,44 @@ namespace FastPoints {
         }
 
         // Samples points over entire point cloud. Uses different streamreaders
-        public override bool SamplePoints(int pointCount, Point[] target) {
+        // public override bool SamplePoints(int pointCount, Point[] target) {
+        //     if (format == Format.INVALID)
+        //         ReadHeader();
+
+        //     int interval = count / pointCount;
+        //     int lineLength;
+
+        //     if (interval < 1)
+        //         throw new ArgumentException("pointCount cannot exceed cloud size");
+
+        //     switch (format) {
+        //         case Format.BINARY_LITTLE_ENDIAN:
+        //             lineLength = CalculateLineBytes(); 
+        //             for (int i = 0; i < pointCount; i++) {
+        //                 target[i] = ReadPointBLE();
+        //                 stream.Seek(lineLength * (interval - 1), SeekOrigin.Current);
+        //             }
+        //             return true;
+        //         case Format.ASCII: // Can't use stream.Seek with ASCII since lines aren't equal length
+        //             for (int i = 0; i < pointCount; i++) {
+        //                 target[i] = ReadPointASCII();
+        //                 for (int j = 0; j < interval-1; j++) 
+        //                     sReader.ReadLine(); 
+        //             }
+        //             return true;
+        //         case Format.BINARY_BIG_ENDIAN:
+        //             lineLength = CalculateLineBytes(); 
+        //             for (int i = 0; i < pointCount; i++) {
+        //                 target[i] = ReadPointBBE();
+        //                 stream.Seek(lineLength * (interval - 1), SeekOrigin.Current);
+        //             }
+        //             return true;
+        //     }
+
+        //     return false;
+        // }
+
+        public override async Task SamplePoints(int pointCount, Point[] target) {
             if (format == Format.INVALID)
                 ReadHeader();
 
@@ -118,31 +158,67 @@ namespace FastPoints {
             if (interval < 1)
                 throw new ArgumentException("pointCount cannot exceed cloud size");
 
-            switch (format) {
-                case Format.BINARY_LITTLE_ENDIAN:
-                    lineLength = CalculateLineBytes(); 
-                    for (int i = 0; i < pointCount; i++) {
-                        target[i] = ReadPointBLE();
-                        stream.Seek(lineLength * (interval - 1), SeekOrigin.Current);
-                    }
-                    return true;
-                case Format.ASCII: // Can't use stream.Seek with ASCII since lines aren't equal length
-                    for (int i = 0; i < pointCount; i++) {
-                        target[i] = ReadPointASCII();
-                        for (int j = 0; j < interval-1; j++) 
-                            sReader.ReadLine(); 
-                    }
-                    return true;
-                case Format.BINARY_BIG_ENDIAN:
-                    lineLength = CalculateLineBytes(); 
-                    for (int i = 0; i < pointCount; i++) {
-                        target[i] = ReadPointBBE();
-                        stream.Seek(lineLength * (interval - 1), SeekOrigin.Current);
-                    }
-                    return true;
-            }
+            ConcurrentQueue<byte[]> readBinaryPoints = new ConcurrentQueue<byte[]>();
+            ConcurrentQueue<string> readASCIIPoints = new ConcurrentQueue<string>();
+            lineLength = CalculateLineBytes(); 
+            bool allPointsRead = false;
+            
+            bool result = false;
 
-            return false;
+            Task t1 = Task.Run(() => {
+                switch (format) {
+                    case Format.BINARY_LITTLE_ENDIAN:
+                    case Format.BINARY_BIG_ENDIAN:
+                        for (int i = 0; i < pointCount; i++) {
+                            readBinaryPoints.Enqueue(bReader.ReadBytes(lineLength));
+                            stream.Seek(lineLength * (interval - 1), SeekOrigin.Current);
+                        }
+                        allPointsRead = true;
+                        UnityEngine.Debug.Log("Done queueing points");
+                        break;
+                    case Format.ASCII:
+                        for (int i = 0; i < pointCount; i++) {
+                            readASCIIPoints.Enqueue(sReader.ReadLine());
+                            for (int j = 0; j < interval-1; j++)
+                                sReader.ReadLine();
+                        }
+                        allPointsRead = true;
+                        break;
+                }
+            });
+
+            Task t2 = Task.Run(() => {
+                switch (format) {
+                    case Format.BINARY_LITTLE_ENDIAN:
+                        for (int i = 0; i < pointCount; i++) {
+                            byte[] bytes;
+                            while (!readBinaryPoints.TryDequeue(out bytes)) {} // Loop until successful dequeue
+                            target[i] = ReadPointBLE(bytes);
+                        }
+                        UnityEngine.Debug.Log("Done dequeueing points");
+                        result = true;
+                        break;
+                    case Format.BINARY_BIG_ENDIAN:
+                        for (int i = 0; i < pointCount; i++) {
+                            byte[] bytes;
+                            while (!readBinaryPoints.TryDequeue(out bytes)) {} // Loop until successful dequeue
+                            target[i] = ReadPointBBE(bytes);
+                        }
+                        result = true;
+                        break;
+                    case Format.ASCII:
+                        for (int i = 0; i < pointCount; i++) {
+                            string str;
+                            while (!readASCIIPoints.TryDequeue(out str)) {} // Loop until successful dequeue
+                            target[i] = ReadPointASCII(str);
+                        }
+                        result = true;
+                        break;
+                }
+            });
+
+            await t1;
+            await t2;
         }
 
         void ReadHeader() {
@@ -240,6 +316,42 @@ namespace FastPoints {
             stream.Position = bodyOffset;
         } 
 
+        Point ReadPointASCII(string str) {
+            float x = 0, y = 0, z = 0;
+            byte r = 255, g = 255, b = 255, a = 255;
+
+            string[] line = str.Split(' ');
+
+            for (int j = 0; j < properties.Count; j++) {
+                double val = double.Parse(line[j]);
+
+                switch (properties[j]) {
+                    case Property.R8: r = Convert.ToByte(val); break;
+                    case Property.G8: g = Convert.ToByte(val); break;
+                    case Property.B8: b = Convert.ToByte(val); break;
+                    case Property.A8: a = Convert.ToByte(val); break;
+
+                    case Property.R16: r = (byte)(Convert.ToUInt16(val) >> 8); break;
+                    case Property.G16: g = (byte)(Convert.ToUInt16(val) >> 8); break;
+                    case Property.B16: b = (byte)(Convert.ToUInt16(val) >> 8); break;
+                    case Property.A16: a = (byte)(Convert.ToUInt16(val) >> 8); break;
+
+                    case Property.SINGLE_X: x = (float)val; break;
+                    case Property.SINGLE_Y: y = (float)val; break;
+                    case Property.SINGLE_Z: z = (float)val; break;
+
+                    case Property.DOUBLE_X: x = (float)val; break;
+                    case Property.DOUBLE_Y: y = (float)val; break;
+                    case Property.DOUBLE_Z: z = (float)val; break;
+
+                    // case Property.DATA_8: case Property.DATA_16: case Property.DATA_32: case Property.DATA_64: break;
+                }
+            }
+
+            // return new Point(x, y, z, ((r << 24) | (g << 16) | (b << 8) | a));
+            return new Point(new Vector3(x, y, z), new Color(r / 255f, g / 255f, b / 255f, a / 255f));
+        }
+
         Point ReadPointASCII() {
             float x = 0, y = 0, z = 0;
             byte r = 255, g = 255, b = 255, a = 255;
@@ -277,6 +389,42 @@ namespace FastPoints {
 
         }
 
+        Point ReadPointBLE(byte[] bytes) {
+            float x = 0, y = 0, z = 0;
+            byte r = 255, g = 255, b = 255, a = 255;
+
+            int i = 0;
+
+            foreach (Property prop in properties) {
+                switch (prop) {
+                    case Property.R8: r = bytes[i]; i++; break;
+                    case Property.G8: g = bytes[i]; i++; break;
+                    case Property.B8: b = bytes[i]; i++; break;
+                    case Property.A8: a = bytes[i]; i++; break;
+
+                    case Property.R16: r = (byte)(BitConverter.ToUInt16(bytes, i) >> 8); i += 2; break;
+                    case Property.G16: g = (byte)(BitConverter.ToUInt16(bytes, i) >> 8); i += 2; break;
+                    case Property.B16: b = (byte)(BitConverter.ToUInt16(bytes, i) >> 8); i += 2; break;
+                    case Property.A16: a = (byte)(BitConverter.ToUInt16(bytes, i) >> 8); i += 2; break;
+
+                    case Property.SINGLE_X: x = BitConverter.ToSingle(bytes, i); i += 4; break;
+                    case Property.SINGLE_Y: y = BitConverter.ToSingle(bytes, i); i += 4; break;
+                    case Property.SINGLE_Z: z = BitConverter.ToSingle(bytes, i); i += 4; break;
+
+                    case Property.DOUBLE_X: x = (float)BitConverter.ToDouble(bytes, i); i += 8; break;
+                    case Property.DOUBLE_Y: y = (float)BitConverter.ToDouble(bytes, i); i += 8; break;
+                    case Property.DOUBLE_Z: z = (float)BitConverter.ToDouble(bytes, i); i += 8; break;
+
+                    case Property.DATA_8: i++; break;
+                    case Property.DATA_16: i += 2; break;
+                    case Property.DATA_32: i += 4; break;
+                    case Property.DATA_64: i += 8; break;
+                }
+            }
+
+            return new Point(new Vector3(x, y, z), new Color(r / 255f, g / 255f, b / 255f, a / 255f));
+        }
+
         Point ReadPointBLE() {
             float x = 0, y = 0, z = 0;
             byte r = 255, g = 255, b = 255, a = 255;
@@ -311,6 +459,10 @@ namespace FastPoints {
             // return new Point(x, y, z, ((r << 24) | (g << 16) | (b << 8) | a));
             return new Point(new Vector3(x, y, z), new Color(r / 255f, g / 255f, b / 255f, a / 255f));
 
+        }
+        
+        Point ReadPointBBE(byte[] bytes) {                               
+            throw new NotImplementedException();
         }
 
         Point ReadPointBBE() {                               

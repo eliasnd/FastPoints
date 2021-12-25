@@ -14,110 +14,90 @@ namespace FastPoints {
 
         #region public
         public PointCloudData data;
-        public bool generateTree = false;
-        public int decimatedCloudSize = 250000;
-        public float pointSize = 0.05f;
+        public bool generateTree = true;
+        public int decimatedCloudSize = 1000000;
+        public float pointSize = 1.5f;
+        public int treeLevels = 5;
         #endregion
 
         ComputeShader countShader;
         ComputeShader sortShader;
+        int maxQueued;
+        
+        GameObject sphere;
 
         #region checkpoints
-
-        bool loading = false;
-        bool reading = false; // Whether data has started reading from file
-        bool merging = false;
-        bool writing = false;
+        public enum Phase { NONE, WAITING, READING, COUNTING, SORTING, WRITING, DONE }
+        Phase currPhase;
+        public Phase CurrPhase { get { return currPhase; } }
 
         #endregion
 
         // Parameters for reading
-        int batchSize = 20000;
+        int batchSize = 100000;
         ConcurrentQueue<Point[]> pointBatches;
         
-        // Parameters for chunking
-        int chunkCount = 128; // Number of chunks per axis, total chunks = chunkCount^3
-        // RenderTexture counts; // Counts for chunking
-        ComputeBuffer countBuffer; // Counts for chunking, flattened
-        uint[] counts;
-        uint[] mergeCounts;
-        List<int> mergeIndices; // List of which indices are being used to represent merged chunks
-        bool boundsPopulated = false;
+        // Parameters for sorting
+        int chunkCount = 0; // Number of chunks per axis, total chunks = chunkCount^3
+        ComputeBuffer sortBuffer; // Buffer for point chunk indices
+        ComputeBuffer countBuffer;  // Counts for each chunk
+        uint[] nodeOffsets;
         uint pointsCounted = 0;
-        float progress = 0.0f;
-        Queue<Point[]> countedBatches;
+        uint pointsSorted = 0;
+        ConcurrentQueue<(Point[], uint[])> sortedBatches;
 
         public void Start() {
-            // Load compute shaders
-                countShader = (ComputeShader)Resources.Load("CountPoints");
-                sortShader = (ComputeShader)Resources.Load("SortPoints");
+            // Load compute shader
+            countShader = (ComputeShader)Resources.Load("CountAndSort");
+            sortShader = countShader;
+            Mathf.Pow(Mathf.Pow(2, treeLevels-1), 3);
+            maxQueued  = (int)((32 * Mathf.Pow(1024, 2)) / (batchSize * System.Runtime.InteropServices.Marshal.SizeOf<Point>()));
         }
 
         public void Update() {
             if (data == null) {
-                loading = false;
-                reading = false;
-                merging = false;
-                writing = false;
+                currPhase = Phase.NONE;
                 pointsCounted = 0;
-                boundsPopulated = false;
+                pointsSorted = 0;
                 return;
             }
-
-            if (countShader == null || sortShader == null)
-                return;
 
             // Start loading if data not null and not loading already
-            if (!loading) {
-                loading = true;
-
-                // Initialize batch queue
-                pointBatches = new ConcurrentQueue<Point[]>();            
-                countedBatches = new Queue<Point[]>();
-
-                // Initialize counting shader
-                // counts = new RenderTexture(chunkCount, chunkCount, 0, RenderTextureFormat.R16);
-                // counts.enableRandomWrite = true;
-                // counts.dimension = UnityEngine.Rendering.TextureDimension.Tex3D;
-                // counts.volumeDepth = chunkCount;
-                // counts.Create();
-                // Use compute buffer instead
-                countBuffer = new ComputeBuffer(chunkCount * chunkCount * chunkCount, sizeof(UInt32));
-                counts = new uint[chunkCount * chunkCount * chunkCount];
-                mergeCounts = new uint[chunkCount * chunkCount * chunkCount];
-                mergeIndices = new List<int>();
-
-                int countHandle = countShader.FindKernel("CountPoints"); // Initialize count shader
-                countShader.SetBuffer(countHandle, "_Counts", countBuffer);
-                countShader.SetInt("_ChunkCount", chunkCount);
-                countShader.SetInt("_ThreadBudget", Mathf.CeilToInt(batchSize / 4096f));
-
-                // TODO: Initialize sorting shader
+            if (currPhase == Phase.NONE) {
+                Initialize();
                 
                 // Start loading point cloud
+                if (!data.Init)
+                    data.Initialize();
 
-                Debug.Log("Done!");
+                if (!data.DecimatedGenerated)
+                    data.PopulateSparseCloud(decimatedCloudSize);
 
-                LoadPointCloud();
+                if (!data.TreeGenerated && generateTree) {
+                    data.LoadPointBatches(batchSize, pointBatches, true); // Async
+                    currPhase = Phase.READING;
+                }
+                else
+                    currPhase = Phase.DONE; // If tree already generated or not generating tree, mark as done
 
                 return;
             }
 
-            // Reading pass
-            if (reading) {
-                // If bounds not populated, wait
-                if (!boundsPopulated) {
-                    boundsPopulated = data.MinPoint.x < data.MaxPoint.x && data.MinPoint.y < data.MaxPoint.y && data.MinPoint.z < data.MaxPoint.z;
-                    if (boundsPopulated) { // If bounds populated for first time, send to count shader
-                        countShader.SetFloats("_MinPoint", new float[] { data.MinPoint.x, data.MinPoint.y, data.MinPoint.z });
-                        countShader.SetFloats("_MaxPoint", new float[] { data.MaxPoint.x, data.MaxPoint.y, data.MaxPoint.z });
-                    } else {
-                        return;
-                    }
+            // Reading pass - wait until bounds populated
+            if (currPhase == Phase.READING) {
+                bool boundsPopulated = data.MinPoint.x < data.MaxPoint.x && data.MinPoint.y < data.MaxPoint.y && data.MinPoint.z < data.MaxPoint.z;
+
+                if (boundsPopulated) { // If bounds populated for first time, send to shaders and 
+                    countShader.SetFloats("_MinPoint", new float[] { data.MinPoint.x, data.MinPoint.y, data.MinPoint.z });
+                    countShader.SetFloats("_MaxPoint", new float[] { data.MaxPoint.x, data.MaxPoint.y, data.MaxPoint.z });
+                    sortShader.SetFloats("_MinPoint", new float[] { data.MinPoint.x, data.MinPoint.y, data.MinPoint.z });
+                    sortShader.SetFloats("_MaxPoint", new float[] { data.MaxPoint.x, data.MaxPoint.y, data.MaxPoint.z });
+                    currPhase = Phase.COUNTING;
                 }
+            }
 
-                // Debug.Log("Bounds: " + data.MinPoint.ToString() + ", " + data.MaxPoint.ToString());
-
+            // Counting pass
+            if (currPhase == Phase.COUNTING) {
                 Point[] batch;
                 if (!pointBatches.TryDequeue(out batch))
                     return;
@@ -130,38 +110,85 @@ namespace FastPoints {
                 countShader.SetInt("_BatchSize", batch.Length);
                 countShader.Dispatch(countHandle, 64, 1, 1);
 
+                pointsCounted += (uint)batch.Length;
+
+                Debug.Log($"Counted total of {pointsCounted} points");
+
+                batchBuffer.Release();
+
+                if (pointsCounted == data.PointCount) { // If all points counted, write counts to array and start reading again
+                    currPhase = Phase.WAITING;
+                    data.LoadPointBatches(batchSize, pointBatches, false);  // pointBatches now empty, but don't need to repopulate bounds
+                    uint[] chunkCounts = new uint[chunkCount * chunkCount * chunkCount];
+                    countBuffer.GetData(chunkCounts);
+                    ComputeChunkOffsets(chunkCounts);
+                }
+            }
+
+            if (currPhase == Phase.SORTING) {
+                if (sortedBatches.Count >= maxQueued)   // Wait until space in sorted queue
+                    return;
+
+                Point[] batch;
+                if (!pointBatches.TryDequeue(out batch))
+                    return;
+                
+                ComputeBuffer batchBuffer = new ComputeBuffer(batchSize, System.Runtime.InteropServices.Marshal.SizeOf<Point>());
+                batchBuffer.SetData(batch);
+                
+                ComputeBuffer sortedBuffer = new ComputeBuffer(batchSize, sizeof(uint));
+
+                int sortHandle = sortShader.FindKernel("SortPoints");
+                sortShader.SetBuffer(sortHandle, "_Points", batchBuffer);
+                sortShader.SetBuffer(sortHandle, "_ChunkIndices", sortedBuffer);
+                sortShader.SetInt("_BatchSize", batch.Length);
+                sortShader.Dispatch(sortHandle, 64, 1, 1);
+
                 batchBuffer.Dispose();
 
-                countedBatches.Enqueue(batch);
-                pointsCounted += (uint)batch.Length;
-                UnityEngine.Debug.Log("Counted total of " + pointsCounted + " points");
+                uint[] sortedIndices = new uint[batch.Length];
+                sortBuffer.GetData(sortedIndices);
+                pointsSorted += (uint)batch.Length;
+                UnityEngine.Debug.Log("Sorted total of " + pointsSorted + " points");
 
-                if (pointsCounted == 20000) {
-                    countBuffer.GetData(counts);
-                    Debug.Log("First Count: " + counts[0]);
-                    Debug.Log("Second Count: " + counts[1]);
-                }
-                if (pointsCounted == data.PointCount) {
-                    reading = false;
-                    merging = true;
-                    countBuffer.GetData(counts);
-                    Debug.Log("Done counting");
+                sortedBatches.Enqueue((batch, sortedIndices));
+
+                batchBuffer.Release();
+                sortedBuffer.Release();
+
+                if (pointsSorted == data.PointCount) {
+                    currPhase = Phase.WRITING;
+                    UnityEngine.Debug.Log("Done sorting");
                 }
             }
 
-            if (merging) {
-                MergeSparseChunks(counts);
-                merging = false;
-            }
+            if (currPhase == Phase.DONE) {
+                // TODO: Write to pointclouddata
+            } else
+                EditorApplication.QueuePlayerLoopUpdate();  // Needed to run update without scene changes
+        }
 
-            if (writing) {
-                if (countedBatches.Count == 0) {
-                    writing = false;
-                    return;
-                }
+        public void Initialize() {
+            // Initialize batch queue
+            pointBatches = new ConcurrentQueue<Point[]>();            
 
-                Point[] batch = countedBatches.Dequeue();
-            }
+            // Number of points each compute shader thread should process
+            // 64 thread groups * 64 threads per group = 4096 threads
+            int threadBudget = Mathf.CeilToInt(batchSize / 4096f);
+
+            // Initialize count shader
+            chunkCount = (int)Mathf.Pow(2, treeLevels);
+            countBuffer = new ComputeBuffer(chunkCount * chunkCount * chunkCount, sizeof(UInt32));
+
+            int countHandle = countShader.FindKernel("CountPoints"); // Initialize count shader
+            countShader.SetBuffer(countHandle, "_Counts", countBuffer);
+            countShader.SetInt("_ChunkCount", chunkCount);
+            countShader.SetInt("_ThreadBudget", threadBudget);
+
+            // Initialize sort shader
+            int sortHandle = sortShader.FindKernel("SortPoints"); // Initialize count shader
+            sortShader.SetInt("_ChunkCount", chunkCount);
+            sortShader.SetInt("_ThreadBudget", threadBudget);
         }
 
         public void OnRenderObject() {
@@ -188,37 +215,38 @@ namespace FastPoints {
             }
         }
 
-        // Starts point cloud loading. Returns true if cloud already loaded, otherwise false
-        bool LoadPointCloud() {
 
-            if (data.Init && data.DecimatedGenerated && data.TreeGenerated)
-                return true;
+        async void ComputeChunkOffsets(uint[] chunkCounts) {
+            await Task.Run(() => {
 
-            if (!data.Init)
-                data.Initialize();
+                nodeOffsets = new uint[chunkCount * chunkCount * chunkCount];
+                nodeOffsets[0] = 0;
+                for (int i = 1; i < chunkCount * chunkCount * chunkCount; i++)
+                    nodeOffsets[i] = nodeOffsets[i-1] + chunkCounts[i-1];
 
-            Debug.Log("Init");
-
-            if (!data.DecimatedGenerated)
-                data.PopulateSparseCloud(decimatedCloudSize);
-
-            Debug.Log("Populated");
-
-            // Debug.Log(generateTree);
-
-            // if (!data.TreeGenerated && generateTree)
-            //     GenerateTree();
-
-            return false;
+            });
+            
+            Debug.Log("Starting sorting...");
+            currPhase = Phase.SORTING;
         }
+        
+        async void WritePoints() {
+            await Task.Run(() => {
+                OctreeIO.CreateLeafFile((uint)data.PointCount, "");
+                int[] nodeIndices = new int[chunkCount * chunkCount * chunkCount];
 
-        async void GenerateTree() {
-            data.LoadPointBatches(batchSize, pointBatches);
-            reading = true;
+                while (currPhase == Phase.SORTING || sortedBatches.Count > 0) {
+                    (Point[], uint[]) batch;
+                    while (!sortedBatches.TryDequeue(out batch)) {}
+                    OctreeIO.WriteLeafNodes(batch.Item1, batch.Item2, nodeOffsets, nodeIndices, "");
+                }
+            });
+
+            currPhase = Phase.DONE;
         }
 
         // Populates merge count array -- for each chunk merged, gets assigned index of lowest (x,y,z) coordinate of merged chunk
-        async void MergeSparseChunks(uint[] counts) {
+        /* async void MergeSparseChunks(uint[] counts) {
             int sparseCutoff = 100;
 
             Func<(int, int, int), uint> getCount = tup => counts[tup.Item1 * chunkCount * chunkCount + tup.Item2 * chunkCount + tup.Item3];
@@ -264,46 +292,6 @@ namespace FastPoints {
             });
 
             writing = true;
-        }
-
-        async void CreateChunkFiles(string root = "") {
-            await Task.Run(() => {
-               for (int i = 0; i < mergeIndices.Count; i++) {
-                    String path = root != "" ? $"{root}/chunk{i}.ply" : $"chunk{i}.ply";
-                    String header = $@"ply
-                    format binary_little_endian 1.0
-                    element vertex {mergeCounts[mergeIndices[i]]}
-                    property float x
-                    property float y
-                    property float z
-                    property uchar red
-                    property uchar green
-                    property uchar blue
-                    end_header
-                    ";
-                    System.IO.File.WriteAllText(path, header);
-               } 
-            });
-        }
-
-        // Create binary ply files for tree nodes
-        async void WriteChunk(int chunkIdx, Point[] points, string root = "") {
-            await Task.Run(() => {
-
-                String path = root == "" ? $"chunk{chunkIdx}.ply" : $"{root}/chunk{chunkIdx}.ply";
-
-                BinaryWriter bw = new BinaryWriter(File.Open(path, FileMode.Append));
-                for (int i = 0; i < points.Length; i++) {
-                    Point pt = points[i];
-                    bw.Write(pt.pos.x);
-                    bw.Write(pt.pos.y);
-                    bw.Write(pt.pos.z);
-                    bw.Write(Convert.ToByte((int)(pt.col.r * 255.0f)));
-                    bw.Write(Convert.ToByte((int)(pt.col.g * 255.0f)));
-                    bw.Write(Convert.ToByte((int)(pt.col.b * 255.0f)));
-                }
-                bw.Dispose();
-            });
-        }
+        } */
     }
 }

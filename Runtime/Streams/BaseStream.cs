@@ -3,6 +3,7 @@ using Unity.Collections;
 
 using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using System.IO;
 
 namespace FastPoints {
@@ -27,6 +28,6 @@ namespace FastPoints {
         }
 
         public abstract bool ReadPoints(int pointCount, Point[] target);
-        public abstract bool SamplePoints(int pointCount, Point[] target);
+        public abstract Task SamplePoints(int pointCount, Point[] target);
     }
 }

@@ -10,6 +10,7 @@ namespace FastPoints {
         public enum FileType { PLY, LAS, LAZ };
         [SerializeField]
         FileType type;
+        public FileType Type { get { return type; } }
         [SerializeField]
         string path;
 
