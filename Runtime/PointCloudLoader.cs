@@ -54,6 +54,10 @@ namespace FastPoints {
         uint pointsWritten = 0;
         ConcurrentQueue<(Point[], uint[])> sortedBatches;
 
+        bool BoundsPopulated { get { 
+            return data.MinPoint.x < data.MaxPoint.x && data.MinPoint.y < data.MaxPoint.y && data.MinPoint.z < data.MaxPoint.z;
+        } }
+
         Stopwatch watch;
 
         public void Start() {
@@ -84,7 +88,7 @@ namespace FastPoints {
                     data.PopulateSparseCloud(decimatedCloudSize);
 
                 if (!data.TreeGenerated && generateTree) {
-                    data.LoadPointBatches(batchSize, pointBatches, true); // Async
+                    data.LoadPointBatches(batchSize, pointBatches, !BoundsPopulated); // Async
                     currPhase = Phase.READING;
                 }
                 else
@@ -95,9 +99,7 @@ namespace FastPoints {
 
             // Reading pass - wait until bounds populated
             if (currPhase == Phase.READING) {
-                bool boundsPopulated = data.MinPoint.x < data.MaxPoint.x && data.MinPoint.y < data.MaxPoint.y && data.MinPoint.z < data.MaxPoint.z;
-
-                if (boundsPopulated) { // If bounds populated for first time, send to shaders and 
+                if (BoundsPopulated) { // If bounds populated for first time, send to shaders and 
                     countShader.SetFloats("_MinPoint", new float[] { data.MinPoint.x, data.MinPoint.y, data.MinPoint.z });
                     countShader.SetFloats("_MaxPoint", new float[] { data.MaxPoint.x, data.MaxPoint.y, data.MaxPoint.z });
                     sortShader.SetFloats("_MinPoint", new float[] { data.MinPoint.x, data.MinPoint.y, data.MinPoint.z });
@@ -173,6 +175,7 @@ namespace FastPoints {
 
                 if (pointsSorted == data.PointCount) {
                     Debug.Log($"[{watch.Elapsed.ToString()}]: Sorting done");
+                    Debug.Log($"Currently {sortedBatches.Count} batches queued to write");
                     currPhase = Phase.WRITING;
                 }
             }
@@ -279,6 +282,7 @@ namespace FastPoints {
                 int[] nodeIndices = new int[chunkCount * chunkCount * chunkCount];
 
                 int[] countWrapper = new int[] { (int)pointsWritten };
+                string output = "";
 
                 while (currPhase == Phase.SORTING || sortedBatches.Count > 0) {
                     if (tasks.Count == maxTasks) {
@@ -288,22 +292,38 @@ namespace FastPoints {
 
                     (Point[], uint[]) batch;
                     while (!sortedBatches.TryDequeue(out batch)) {}
-                    tasks.Add(OctreeIO.WriteLeafNodes(batch.Item1, batch.Item2, nodeOffsets, nodeIndices, "Assets", countWrapper));
+                    tasks.Add(
+                        OctreeIO.WriteLeafNodes(batch.Item1, batch.Item2, nodeOffsets, nodeIndices, "Assets", countWrapper)
+                        .ContinueWith(t =>
+                            {
+                                var ex = t.Exception?.GetBaseException();
+                                if (ex != null)
+                                {
+                                    Debug.LogError($"Task faulted and stopped running. ErrorType={ex.GetType()} ErrorMessage={ex.Message}");
+                                }
+                            },
+                            TaskContinuationOptions.OnlyOnFaulted
+                        )
+                    );
                     pointsWritten = (uint)countWrapper[0];
 
+                    Debug.Log("Looping");
                     if (currPhase != Phase.SORTING)
                         Debug.Log($"{sortedBatches.Count} batches left to count...");
-
-                    Debug.Log($"Loop status: {currPhase == Phase.SORTING} || count {sortedBatches.Count} > 0");
                 }
 
-                Debug.Log($"Here {tasks.Count}");
+                // Debug.Log($"Here {tasks.Count}");
 
                 while (tasks.Count > 0) {
                     Debug.Log("Still going...");
                     int t = Task.WaitAny(tasks.ToArray());
                     tasks.RemoveAt(t);
                     pointsWritten = (uint)countWrapper[0];
+
+                    if (output != "") {
+                        Debug.Log(output);
+                        output = "";
+                    }
                 }
             });
 

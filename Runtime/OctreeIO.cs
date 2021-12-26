@@ -1,3 +1,5 @@
+using UnityEngine;
+
 using System;
 using System.Collections.Generic;
 using System.Threading;
@@ -5,10 +7,12 @@ using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using System.IO;
 
+using Debug = UnityEngine.Debug;
+
 namespace FastPoints {
 
     // Helper class for reading and writing octrees
-    public static class OctreeIO {
+    public class OctreeIO : MonoBehaviour {
         static int headerBytes = 0; // TODO: Number of bytes in ply file header System.Text.ASCIIEncoding.ASCII.GetByteCount
         static int pointBytes = 15; // Marshal.SizeOf<Point>();    // Number of bytes per point - should be 12 for position + 3 for color = 15(?)
 
@@ -38,11 +42,15 @@ end_header
         //  nodeIndices - current index in each node
         public static async Task WriteLeafNodes(Point[] points, uint[] sorted, uint[] nodeOffsets, int[] nodeIndices, string root = "", int[] countWrapper = null) {
             await Task.Run(() => {
+                Debug.Log("Task started");
+                uint pointsWritten = 0;
                 // Convert to dictionary
                 Dictionary<uint, List<Point>> nodes = new Dictionary<uint, List<Point>>();
                 for (int i = 0; i < points.Length; i++) {
                     if (!nodes.ContainsKey(sorted[i]))
                         nodes.Add(sorted[i], new List<Point>());
+                    if (points[i].pos == Vector3.zero)
+                        throw new Exception($"Found zero position at index {i}");
                     nodes[sorted[i]].Add(points[i]);
                 }
 
@@ -56,10 +64,12 @@ end_header
 
                 string path = root != "" ? $"{root}/leaf_nodes.ply" : $"leaf_nodes.ply";
 
-                FileStream stream = File.Open(path, FileMode.Open);
+                FileStream stream = File.Open(path, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite);
                 BinaryWriter bw = new BinaryWriter(stream);
                 foreach (KeyValuePair<uint, List<Point>> node in nodes) {
                     int startIdx = Interlocked.Add(ref nodeIndices[node.Key], node.Value.Count) - node.Value.Count;    // Should work as fetch-and-add operation, reserving space in file
+                    if (node.Key == 3655)
+                        Debug.Log($"Reserved {node.Value.Count} positions at index {startIdx} / {nodeOffsets[node.Key+1]-nodeOffsets[node.Key]} of node {node.Key}");
                     List<byte> bytes = new List<byte>(pointBytes * node.Value.Count);
                     for (int i = 0; i < node.Value.Count; i++) {
                         Point pt = node.Value[i];
@@ -81,10 +91,14 @@ end_header
                         // if (bytes.Count != pointBytes)
                             // throw new Exception($"Byte size {bytes.Count}, expected size {pointBytes}");
                     }
+
+                    if (node.Key == 3655)
+                        Debug.Log($"Writing {bytes.Count} bytes, {bytes.Count / pointBytes} points");
                     stream.Seek(headerBytes + (nodeOffsets[node.Key] + startIdx) * pointBytes, SeekOrigin.Begin);
                     bw.Write(bytes.ToArray(), 0, bytes.Count);
                 }
                 bw.Dispose();
+                Debug.Log("Task done");
 
                 if (countWrapper != null)
                     Interlocked.Add(ref countWrapper[0], points.Length);

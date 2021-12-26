@@ -69,6 +69,7 @@ namespace FastPoints {
                 case Format.BINARY_LITTLE_ENDIAN:
                     for (int i = 0; i < pointCount; i++) {
                         target[i] = ReadPointBLE();
+                        // Debug.Log($"Read point {i} as {target[i].ToString()}");
                         currMinPoint = Vector3.Min(currMinPoint, target[i].pos);
                         currMaxPoint = Vector3.Max(currMaxPoint, target[i].pos);
                     }

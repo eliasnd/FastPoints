@@ -95,6 +95,8 @@ namespace FastPoints {
                         Debug.Log($"Scanning batch {i+1}/{(int)(count / batchSize)}");
                     }
 
+                    Debug.Log("Out of loop");
+
                     batch = new Point[count % batchSize];
                     scanStream.ReadPoints(count % batchSize, batch);
 
