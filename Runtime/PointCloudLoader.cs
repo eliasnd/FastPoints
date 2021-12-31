@@ -23,8 +23,7 @@ namespace FastPoints {
         public int treeLevels = 5;
         #endregion
 
-        ComputeShader countShader;
-        ComputeShader sortShader;
+        ComputeShader computeShader;
         int maxQueued;
         
         GameObject sphere;
@@ -62,8 +61,7 @@ namespace FastPoints {
 
         public void Start() {
             // Load compute shader
-            countShader = (ComputeShader)Resources.Load("CountAndSort");
-            sortShader = countShader;
+            computeShader = (ComputeShader)Resources.Load("CountAndSort");
             Mathf.Pow(Mathf.Pow(2, treeLevels-1), 3);
             maxQueued  = (int)((32 * Mathf.Pow(1024, 2)) / (batchSize * System.Runtime.InteropServices.Marshal.SizeOf<Point>()));
         }
@@ -100,10 +98,8 @@ namespace FastPoints {
             // Reading pass - wait until bounds populated
             if (currPhase == Phase.READING) {
                 if (BoundsPopulated) { // If bounds populated for first time, send to shaders and 
-                    countShader.SetFloats("_MinPoint", new float[] { data.MinPoint.x, data.MinPoint.y, data.MinPoint.z });
-                    countShader.SetFloats("_MaxPoint", new float[] { data.MaxPoint.x, data.MaxPoint.y, data.MaxPoint.z });
-                    sortShader.SetFloats("_MinPoint", new float[] { data.MinPoint.x, data.MinPoint.y, data.MinPoint.z });
-                    sortShader.SetFloats("_MaxPoint", new float[] { data.MaxPoint.x, data.MaxPoint.y, data.MaxPoint.z });
+                    computeShader.SetFloats("_MinPoint", new float[] { data.MinPoint.x-1E-5f, data.MinPoint.y-1E-5f, data.MinPoint.z-1E-5f });
+                    computeShader.SetFloats("_MaxPoint", new float[] { data.MaxPoint.x+1E-5f, data.MaxPoint.y+1E-5f, data.MaxPoint.z+1E-5f });
                     Debug.Log($"[{watch.Elapsed.ToString()}]: Reading done");
                     currPhase = Phase.COUNTING;
                 }
@@ -118,10 +114,10 @@ namespace FastPoints {
                 ComputeBuffer batchBuffer = new ComputeBuffer(batchSize, System.Runtime.InteropServices.Marshal.SizeOf<Point>());
                 batchBuffer.SetData(batch);
 
-                int countHandle = countShader.FindKernel("CountPoints");
-                countShader.SetBuffer(countHandle, "_Points", batchBuffer);
-                countShader.SetInt("_BatchSize", batch.Length);
-                countShader.Dispatch(countHandle, 64, 1, 1);
+                int countHandle = computeShader.FindKernel("CountPoints");
+                computeShader.SetBuffer(countHandle, "_Points", batchBuffer);
+                computeShader.SetInt("_BatchSize", batch.Length);
+                computeShader.Dispatch(countHandle, 64, 1, 1);
 
                 pointsCounted += (uint)batch.Length;
 
@@ -155,17 +151,19 @@ namespace FastPoints {
                 
                 ComputeBuffer sortedBuffer = new ComputeBuffer(batchSize, sizeof(uint));
 
-                int sortHandle = sortShader.FindKernel("SortPoints");
-                sortShader.SetBuffer(sortHandle, "_Points", batchBuffer);
-                sortShader.SetBuffer(sortHandle, "_ChunkIndices", sortedBuffer);
-                sortShader.SetInt("_BatchSize", batch.Length);
-                sortShader.Dispatch(sortHandle, 64, 1, 1);
+                int sortHandle = computeShader.FindKernel("SortPoints");
+                computeShader.SetBuffer(sortHandle, "_Points", batchBuffer);
+                computeShader.SetBuffer(sortHandle, "_ChunkIndices", sortedBuffer);
+                computeShader.SetInt("_BatchSize", batch.Length);
+                computeShader.Dispatch(sortHandle, 64, 1, 1);
 
                 batchBuffer.Dispose();
 
                 uint[] sortedIndices = new uint[batch.Length];
                 sortedBuffer.GetData(sortedIndices);
                 pointsSorted += (uint)batch.Length;
+
+                Debug.Log($"Testing sort shader: on point {batch[0].pos.x}, {batch[0].pos.y}, {batch[0].pos.z}, index was {sortedIndices[0]}");
                 // UnityEngine.Debug.Log("Sorted total of " + pointsSorted + " points");
 
                 sortedBatches.Enqueue((batch, sortedIndices));
@@ -200,15 +198,11 @@ namespace FastPoints {
             chunkCount = (int)Mathf.Pow(2, treeLevels);
             countBuffer = new ComputeBuffer(chunkCount * chunkCount * chunkCount, sizeof(UInt32));
 
-            int countHandle = countShader.FindKernel("CountPoints"); // Initialize count shader
-            countShader.SetBuffer(countHandle, "_Counts", countBuffer);
-            countShader.SetInt("_ChunkCount", chunkCount);
-            countShader.SetInt("_ThreadBudget", threadBudget);
+            int countHandle = computeShader.FindKernel("CountPoints"); // Initialize count shader
+            computeShader.SetBuffer(countHandle, "_Counts", countBuffer);
 
-            // Initialize sort shader
-            int sortHandle = sortShader.FindKernel("SortPoints"); // Initialize count shader
-            sortShader.SetInt("_ChunkCount", chunkCount);
-            sortShader.SetInt("_ThreadBudget", threadBudget);
+            computeShader.SetInt("_ChunkCount", chunkCount);
+            computeShader.SetInt("_ThreadBudget", threadBudget);
 
             watch = new Stopwatch();
             watch.Start();
