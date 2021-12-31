@@ -1,8 +1,9 @@
-/* using UnityEngine;
+using UnityEngine;
 
 using System;
 using System.IO;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Collections.Generic;
 using System.Collections.Concurrent;
 
@@ -11,76 +12,89 @@ namespace FastPoints {
     // Eventually add dynamic level increases like Potree 2.0
 
     [Serializable]
-    class OctreeNode {
-        [Serializable]
+    public class OctreeNode {
+        
+        
+
+        #region octree
+        [SerializeField]
         int count = 0;
         public int PointCount { get { return count; } }
-        public int Offset; // Offset into file in bytes
-        [Serializable]
-        int idx;
-        public int Index { get { return idx; } }
-        [Serializable]
+
+        [SerializeField]
         OctreeNode[] children = null;  // Child list
         
-        [Serializable]
+        [SerializeField]
         Vector3 minPoint;
-        [Serializable]
+        [SerializeField]
         Vector3 maxPoint;
-        [Serializable]
-        string path = "";
-        public string Path { get { return path; } }
+        [SerializeField]
+        #endregion
 
-        ConcurrentBag<byte> writeBuffer;
-        int maxWriteBufferSize = 1000;
+        #region io
+        string filePath = "";
+        int offset; // Offset into file in bytes
+        int pointsWritten = 0;
+        public bool AllPointsWritten { get { return count == pointsWritten; } }
 
-        public OctreeNode(int idx) {
-            this.idx = idx;
-            writeBuffer = new List<byte>();
-        }
+        Mutex bufferLock;
+        static int writeBufferSize = 4096;  // Write buffer size in bytes
+        byte[] writeBuffer = new byte[writeBufferSize];
+        int writeBufferIdx = 0;
+        #endregion
 
-        public bool Expand() {
-            if (children != null)
-                return false;
-
-            children = new OctreeNode[8];
-            for (int i = 0; i < 8; i++)
-                children[i] = new OctreeNode(level+1);
-            return true;
-        }
-
-        public void CreateFile(string root="Assets/tmp") {
-            path = root != "" ? $"{root}/node_{idx}.bin" : $"node_{idx}.bin";
-            File.Create(path);
-            bw = new BinaryWriter(File.Open(path, FileMode.Append, FileAccess.Write));
+        public OctreeNode(int count, int offset, string filePath) {
+            this.count = count;
+            this.offset = offset;
+            this.filePath = filePath;
+            bufferLock = new Mutex();
         }
 
         // Writes points to buffer. Writes buffer to file if forcewrite = true or if buffer over given size
         // Passing forceWrite with no points will write buffer, but not add anything
-        public async Task WritePoints(Point[] points = null, bool forceWrite = false) {
-            if (path == "")
-                throw new Exception("File not created!");
-
+        public async Task WritePoints(Point[] points) {
             await Task.Run(() => {
-                if (points != null) {
-                    foreach (Point pt in points)
-                        foreach (byte b in points.ToBytes())
-                            writeBuffer.Add(b);
-                }
+                if (pointsWritten + points.Length > count)
+                    throw new Exception($"Trying to write {points.Length} points to node with {count-pointsWritten} remaining points allocated");
 
-                if (writeBuffer.Count > maxWriteBufferSize || forceWrite) {
-                    bw.Write(writeBuffer.ToArray(), 0, writeBuffer.Count);
-                    Interlocked.Add(count, writeBuffer.Count);
-                    writeBuffer.Clear();
-                }
+                bufferLock.WaitOne();
+
+                BinaryWriter bw = new BinaryWriter(File.Open(filePath, FileMode.Open));
+
+                foreach (Point pt in points)
+                    foreach (byte b in pt.ToBytes()) {
+                        writeBuffer[writeBufferIdx] = b;
+                        writeBufferIdx++;
+
+                        // Flush buffer
+                        if (writeBufferIdx == writeBufferSize) {
+                            bw.Write(writeBuffer, 0, writeBufferIdx);
+                            pointsWritten += writeBufferIdx;
+                            writeBufferIdx = 0;
+                        }
+                    }
+
+                bw.Close();
+
+                bufferLock.ReleaseMutex();
             });
         }
 
-        // For deleting file after merging
-        public bool DeleteFile() {
-            if (path == "")
-                throw new Exception("File not created!");
+        public async Task FlushBuffer() {
+            await Task.Run(() => {
+                if (writeBufferIdx == 0)
+                    throw new Exception("Trying to flush empty buffer!");
 
-            File.Delete(path);
+                bufferLock.WaitOne();
+
+                BinaryWriter bw = new BinaryWriter(File.Open(filePath, FileMode.Open));
+                bw.Write(writeBuffer, 0, writeBufferIdx);
+                pointsWritten += writeBufferIdx;
+                writeBufferIdx = 0;
+                bw.Close();
+
+                bufferLock.ReleaseMutex();
+            });
         }
 
         public OctreeNode GetChild(int i) {
@@ -93,4 +107,4 @@ namespace FastPoints {
             throw new NotImplementedException();
         }
     }
-} */
+}
