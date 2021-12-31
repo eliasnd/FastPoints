@@ -41,7 +41,8 @@ namespace FastPoints {
         ConcurrentQueue<Point[]> pointBatches;
         
         // Parameters for sorting
-        int chunkCount = 0; // Number of chunks per axis, total chunks = chunkCount^3
+        int leafCountAxis { get { return (int)Mathf.Pow(2, treeLevels); } }
+        int leafCountTotal { get { return leafCountAxis * leafCountAxis * leafCountAxis; } }
         ComputeBuffer sortBuffer; // Buffer for point chunk indices
         ComputeBuffer countBuffer;  // Counts for each chunk
         uint[] nodeOffsets;
@@ -128,12 +129,11 @@ namespace FastPoints {
                 if (pointsCounted == data.PointCount) { // If all points counted, write counts to array and start reading again
                     currPhase = Phase.WAITING;
                     data.LoadPointBatches(batchSize, pointBatches, false);  // pointBatches now empty, but don't need to repopulate bounds
-                    uint[] chunkCounts = new uint[chunkCount * chunkCount * chunkCount];
-                    countBuffer.GetData(chunkCounts);
+                    uint[] leafNodeCounts = new uint[leafCountTotal];
+                    countBuffer.GetData(leafNodeCounts);
                     TimeSpan currTime = watch.Elapsed;
                     Debug.Log($"[{currTime.ToString()}]: Counting done");
-                    WritePoints(chunkCounts);
-                    // ComputeChunkOffsets(chunkCounts);
+                    WritePoints(leafNodeCounts);
                 }
             }
 
@@ -195,13 +195,12 @@ namespace FastPoints {
             int threadBudget = Mathf.CeilToInt(batchSize / 4096f);
 
             // Initialize count shader
-            chunkCount = (int)Mathf.Pow(2, treeLevels);
-            countBuffer = new ComputeBuffer(chunkCount * chunkCount * chunkCount, sizeof(UInt32));
+            countBuffer = new ComputeBuffer(leafCountTotal, sizeof(UInt32));
 
             int countHandle = computeShader.FindKernel("CountPoints"); // Initialize count shader
             computeShader.SetBuffer(countHandle, "_Counts", countBuffer);
 
-            computeShader.SetInt("_ChunkCount", chunkCount);
+            computeShader.SetInt("_NodeCount", leafCountAxis);
             computeShader.SetInt("_ThreadBudget", threadBudget);
 
             watch = new Stopwatch();
@@ -243,29 +242,13 @@ namespace FastPoints {
                 cb.Dispose();
             }
         }
-
-
-        async void ComputeChunkOffsets(uint[] chunkCounts) {
-            await Task.Run(() => {
-
-                nodeOffsets = new uint[chunkCount * chunkCount * chunkCount];
-                nodeOffsets[0] = 0;
-                for (int i = 1; i < chunkCount * chunkCount * chunkCount; i++)
-                    nodeOffsets[i] = nodeOffsets[i-1] + chunkCounts[i-1];
-
-            });
-            
-            Debug.Log($"[{watch.Elapsed.ToString()}]: Chunk offsets done");
-            currPhase = Phase.SORTING;
-            // WritePoints();  // Starts writing point
-        }
         
-        async void WritePoints(uint[] chunkCounts) {
+        async void WritePoints(uint[] leafNodeCounts) {
             await Task.Run(() => {
-                nodeOffsets = new uint[chunkCount * chunkCount * chunkCount];
+                nodeOffsets = new uint[leafCountTotal];
                 nodeOffsets[0] = 0;
-                for (int i = 1; i < chunkCount * chunkCount * chunkCount; i++)
-                    nodeOffsets[i] = nodeOffsets[i-1] + chunkCounts[i-1];
+                for (int i = 1; i < leafCountTotal; i++)
+                    nodeOffsets[i] = nodeOffsets[i-1] + leafNodeCounts[i-1];
 
                 currPhase = Phase.SORTING;
 
@@ -273,7 +256,7 @@ namespace FastPoints {
                 int maxTasks = 100;
 
                 OctreeIO.CreateLeafFile((uint)data.PointCount, "Assets");
-                int[] nodeIndices = new int[chunkCount * chunkCount * chunkCount];
+                int[] nodeIndices = new int[leafCountTotal];
 
                 int[] countWrapper = new int[] { (int)pointsWritten };
                 string output = "";
@@ -323,54 +306,5 @@ namespace FastPoints {
 
             currPhase = Phase.DONE;
         }
-
-        // Populates merge count array -- for each chunk merged, gets assigned index of lowest (x,y,z) coordinate of merged chunk
-        /* async void MergeSparseChunks(uint[] counts) {
-            int sparseCutoff = 100;
-
-            Func<(int, int, int), uint> getCount = tup => counts[tup.Item1 * chunkCount * chunkCount + tup.Item2 * chunkCount + tup.Item3];
-            Func<int, int, int, int, int, int, uint> countChunk = delegate(int x1, int x2, int y1, int y2, int z1, int z2) {
-                uint sum = 0;
-                for (int i = x1; i < x2; i++)
-                    for (int j = y1; j < y2; j++)
-                        for (int k = z1; k < z2; k++)
-                            sum += getCount((i,j,k));
-                return sum;
-            };
-
-            Action<int, int, int, int, int, int, uint> markChunk = delegate(int x1, int x2, int y1, int y2, int z1, int z2, uint mergeVal) {
-                for (int i = x1; i < x2; i++)
-                    for (int j = y1; j < y2; j++)
-                        for (int k = z1; k < z2; k++) {
-                            int chunkIdx = i * chunkCount * chunkCount + j * chunkCount + k;
-                            mergeCounts[chunkIdx] = mergeVal;
-                            if (mergeIndices.Contains(chunkIdx))
-                                mergeIndices.Remove(chunkIdx);
-                        }
-                mergeIndices.Add((int)mergeVal);
-            };
-            
-
-            await Task.Run(() => {
-                for (uint i = 0; i < counts.Length; i++) {
-                    mergeCounts[i] = i;
-                    mergeIndices.Add((int)i);
-                }
-
-                for (int size = 2; size < chunkCount; size *= 2) {
-                    for (int i = 1; i <= chunkCount / size; i++) {
-                        for (int j = 1; j <= chunkCount / size; j++) {
-                            for (int k = 1; k <= chunkCount / size; k++) {
-                                if (countChunk((i-1)*size,i*size,(j-1)*size,j*size,(k-1)*size,k*size) <= sparseCutoff) {
-                                    markChunk((i-1)*size,i*size,(j-1)*size,j*size,(k-1)*size,k*size, (uint)((i-1)*size));
-                                }
-                            }
-                        }
-                    }
-                }
-            });
-
-            writing = true;
-        } */
     }
 }
