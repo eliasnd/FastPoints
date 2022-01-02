@@ -28,13 +28,11 @@ namespace FastPoints {
         
         GameObject sphere;
 
-        #region checkpoints
         public enum Phase { NONE, WAITING, READING, COUNTING, SORTING, WRITING, DONE }
         [SerializeField]
         Phase currPhase;
         public Phase CurrPhase { get { return currPhase; } }
 
-        #endregion
 
         // Parameters for reading
         public int batchSize = 100000;
@@ -59,6 +57,8 @@ namespace FastPoints {
         } }
 
         Stopwatch watch;
+
+        Octree tree;
 
         public void Start() {
             // Load compute shader
@@ -128,12 +128,18 @@ namespace FastPoints {
 
                 if (pointsCounted == data.PointCount) { // If all points counted, write counts to array and start reading again
                     currPhase = Phase.WAITING;
-                    data.LoadPointBatches(batchSize, pointBatches, false);  // pointBatches now empty, but don't need to repopulate bounds
+
                     uint[] leafNodeCounts = new uint[leafCountTotal];
                     countBuffer.GetData(leafNodeCounts);
+                    tree = new Octree(treeLevels, leafNodeCounts);
+                    
                     TimeSpan currTime = watch.Elapsed;
                     Debug.Log($"[{currTime.ToString()}]: Counting done");
+
+                    data.LoadPointBatches(batchSize, pointBatches, false);  // pointBatches now empty, but don't need to repopulate bounds
                     WritePoints(leafNodeCounts);
+
+                    currPhase = Phase.SORTING;
                 }
             }
 
@@ -245,63 +251,43 @@ namespace FastPoints {
         
         async void WritePoints(uint[] leafNodeCounts) {
             await Task.Run(() => {
-                nodeOffsets = new uint[leafCountTotal];
-                nodeOffsets[0] = 0;
-                for (int i = 1; i < leafCountTotal; i++)
-                    nodeOffsets[i] = nodeOffsets[i-1] + leafNodeCounts[i-1];
-
-                currPhase = Phase.SORTING;
-
                 List<Task> tasks = new List<Task>();
                 int maxTasks = 100;
 
-                OctreeIO.CreateLeafFile((uint)data.PointCount, "Assets");
-                int[] nodeIndices = new int[leafCountTotal];
-
-                int[] countWrapper = new int[] { (int)pointsWritten };
-                string output = "";
-
                 while (currPhase == Phase.SORTING || sortedBatches.Count > 0) {
-                    if (tasks.Count == maxTasks) {
-                        int t = Task.WaitAny(tasks.ToArray());
-                        tasks.RemoveAt(t);
-                    } 
+                    // Remove any finished tasks
+                    for (int i = 0; i < tasks.Count; i++) {
+                        if (tasks[i].Status == TaskStatus.RanToCompletion) {
+                            tasks.RemoveAt(i);
+                            i--;
+                        }
+                    }
+
+                    // Wait if over task limit
+                    if (tasks.Count == maxTasks)
+                        tasks.RemoveAt(Task.WaitAny(tasks.ToArray()));
 
                     (Point[], uint[]) batch;
                     while (!sortedBatches.TryDequeue(out batch)) {}
+
+                    // Add new task
                     tasks.Add(
-                        OctreeIO.WriteLeafNodes(batch.Item1, batch.Item2, nodeOffsets, nodeIndices, "Assets", countWrapper)
+                        tree.WritePoints(batch.Item1, batch.Item2)
                         .ContinueWith(t =>
                             {
                                 var ex = t.Exception?.GetBaseException();
                                 if (ex != null)
-                                {
                                     Debug.LogError($"Task faulted and stopped running. ErrorType={ex.GetType()} ErrorMessage={ex.Message}");
-                                }
+                                pointsWritten += (uint)batch.Item1.Length;
                             },
-                            TaskContinuationOptions.OnlyOnFaulted
+                            TaskContinuationOptions.NotOnCanceled
                         )
                     );
-                    pointsWritten = (uint)countWrapper[0];
-
-                    Debug.Log("Looping");
-                    if (currPhase != Phase.SORTING)
-                        Debug.Log($"{sortedBatches.Count} batches left to count...");
                 }
 
-                // Debug.Log($"Here {tasks.Count}");
+                Task.WaitAll(tasks.ToArray());
 
-                while (tasks.Count > 0) {
-                    Debug.Log("Still going...");
-                    int t = Task.WaitAny(tasks.ToArray());
-                    tasks.RemoveAt(t);
-                    pointsWritten = (uint)countWrapper[0];
-
-                    if (output != "") {
-                        Debug.Log(output);
-                        output = "";
-                    }
-                }
+                tree.FlushNodeBuffers();
             });
 
             currPhase = Phase.DONE;

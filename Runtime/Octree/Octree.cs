@@ -35,7 +35,7 @@ namespace FastPoints {
             int currOffset = 0;
             for (int i = 0; i < LeafNodeTotal; i++) {
                 leafNodes[i] = new OctreeNode((int)leafNodeCounts[i], currOffset, $"{dirPath}/octree.bin");
-                currOffset += (int)leafNodeCounts[i];
+                currOffset += (int)leafNodeCounts[i] * 15;
             }
                 
         }
@@ -51,13 +51,29 @@ namespace FastPoints {
                 }
 
                 List<Task> tasks = new List<Task>();
+                // int maxTasks = 100;
 
-                foreach (int nidx in sorted.Keys)
+                foreach (int nidx in sorted.Keys) {
+                    // while (tasks.Count > maxTasks)
+                        // tasks.RemoveAt(Task.WaitAny(tasks.ToArray()));
+
                     tasks.Add(leafNodes[nidx].WritePoints(sorted[nidx].ToArray()));
+                }
 
                 Task.WaitAll(tasks.ToArray());
             });
             
+        }
+
+        public async Task FlushNodeBuffers() {
+            await Task.Run(() => {
+                List<Task> tasks = new List<Task>(leafNodes.Length);
+
+                foreach (OctreeNode n in leafNodes)
+                    tasks.Add(n.FlushBuffer());
+
+                Task.WaitAll(tasks.ToArray());
+            });
         }
 
 

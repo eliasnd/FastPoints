@@ -12,7 +12,7 @@ namespace FastPoints {
     // Eventually add dynamic level increases like Potree 2.0
 
     [Serializable]
-    public class OctreeNode {
+    public class OctreeNode : MonoBehaviour {
         
         
 
@@ -59,7 +59,7 @@ namespace FastPoints {
 
                 bufferLock.WaitOne();
 
-                BinaryWriter bw = new BinaryWriter(File.Open(filePath, FileMode.Open));
+                BinaryWriter bw = new BinaryWriter(File.Open(filePath, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite));
 
                 foreach (Point pt in points)
                     foreach (byte b in pt.ToBytes()) {
@@ -69,7 +69,7 @@ namespace FastPoints {
                         // Flush buffer
                         if (writeBufferIdx == writeBufferSize) {
                             bw.Write(writeBuffer, 0, writeBufferIdx);
-                            pointsWritten += writeBufferIdx;
+                            pointsWritten += writeBufferIdx / 15;
                             writeBufferIdx = 0;
                         }
                     }
@@ -87,7 +87,7 @@ namespace FastPoints {
 
                 bufferLock.WaitOne();
 
-                BinaryWriter bw = new BinaryWriter(File.Open(filePath, FileMode.Open));
+                BinaryWriter bw = new BinaryWriter(File.Open(filePath, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite));
                 bw.Write(writeBuffer, 0, writeBufferIdx);
                 pointsWritten += writeBufferIdx;
                 writeBufferIdx = 0;
