@@ -38,7 +38,7 @@ namespace FastPoints {
         int pointsWritten { get { return bytesWritten / 15; } }
         public bool AllPointsWritten { get { return count == pointsWritten; } }
 
-        Mutex bufferLock;
+        readonly object writeLock = new object();
         static int writeBufferSize = 4096;  // Write buffer size in bytes
         byte[] writeBuffer = new byte[writeBufferSize];
         int writeBufferIdx = 0;
@@ -60,7 +60,6 @@ namespace FastPoints {
                 children[i] = new OctreeNode();
 
             BBox = bbox;
-            bufferLock = new Mutex();
             initialized = true;
         }
 
@@ -70,7 +69,6 @@ namespace FastPoints {
             this.filePath = filePath;
             
             BBox = bbox;
-            bufferLock = new Mutex();
             initialized = true;
         }
 
@@ -81,38 +79,37 @@ namespace FastPoints {
                 if (pointsWritten + points.Length > count)
                     throw new Exception($"Trying to write {points.Length} points to node with {count-pointsWritten} remaining points allocated");
 
-                bufferLock.WaitOne();
-
-                BinaryWriter bw = new BinaryWriter(File.Open(filePath, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite));
-                try {
-                    bw.BaseStream.Seek(offset + bytesWritten, SeekOrigin.Begin);
-                } catch {
-                    throw new Exception($"Error trying to seek offset {offset} + bytesWritten {bytesWritten} = {offset+bytesWritten}");
-                }
-                
-
-                foreach (Point pt in points) {
+                lock (writeLock) {
+                    BinaryWriter bw = new BinaryWriter(File.Open(filePath, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite));
                     try {
-                        foreach (byte b in pt.ToBytes()) {
-                            writeBuffer[writeBufferIdx] = b;
-                            writeBufferIdx++;
-
-                            // Flush buffer
-                            if (writeBufferIdx == writeBufferSize) {
-                                bw.Write(writeBuffer, 0, writeBufferIdx);
-                                bytesWritten += writeBufferIdx;
-                                writeBufferIdx = 0;
-                            }
-                        }
+                        bw.BaseStream.Seek(offset + bytesWritten, SeekOrigin.Begin);
                     } catch {
-                        throw new Exception($"Exception while writing points, writeBufferIdx is {writeBufferIdx}");
+                        throw new Exception($"Error trying to seek offset {offset} + bytesWritten {bytesWritten} = {offset+bytesWritten}");
                     }
-                }
                     
 
-                bw.Close();
+                    foreach (Point pt in points) {
+                        try {
+                            foreach (byte b in pt.ToBytes()) {
+                                writeBuffer[writeBufferIdx] = b;
+                                writeBufferIdx++;
 
-                bufferLock.ReleaseMutex();
+                                // Flush buffer
+                                if (writeBufferIdx == writeBufferSize) {
+                                    bw.Write(writeBuffer, 0, writeBufferIdx);
+                                    bytesWritten += writeBufferIdx;
+                                    writeBufferIdx = 0;
+                                }
+                            }
+                        } catch {
+                            throw new Exception($"Exception while writing points, writeBufferIdx is {writeBufferIdx}");
+                        }
+                    }
+
+                    bw.Close();
+                }
+
+                
             });
         }
 
@@ -126,16 +123,14 @@ namespace FastPoints {
                     return;
                     // throw new Exception("Trying to flush empty buffer!");
 
-                bufferLock.WaitOne();
-
-                BinaryWriter bw = new BinaryWriter(File.Open(filePath, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite));
-                bw.BaseStream.Seek(offset + bytesWritten, SeekOrigin.Begin); 
-                bw.Write(writeBuffer, 0, writeBufferIdx);
-                bytesWritten += writeBufferIdx;
-                writeBufferIdx = 0;
-                bw.Close();
-
-                bufferLock.ReleaseMutex();
+                lock (writeLock) {
+                    BinaryWriter bw = new BinaryWriter(File.Open(filePath, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite));
+                    bw.BaseStream.Seek(offset + bytesWritten, SeekOrigin.Begin); 
+                    bw.Write(writeBuffer, 0, writeBufferIdx);
+                    bytesWritten += writeBufferIdx;
+                    writeBufferIdx = 0;
+                    bw.Close();
+                }
             });
         }
 
