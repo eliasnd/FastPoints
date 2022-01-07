@@ -28,7 +28,7 @@ namespace FastPoints {
         
         GameObject sphere;
 
-        public enum Phase { NONE, WAITING, READING, COUNTING, SORTING, WRITING, DONE }
+        public enum Phase { NONE, READING, COUNTING, SORTING, WRITING, SUBSAMPLING, DONE }
         [SerializeField]
         Phase currPhase;
         public Phase CurrPhase { get { return currPhase; } }
@@ -39,8 +39,8 @@ namespace FastPoints {
         ConcurrentQueue<Point[]> pointBatches;
         
         // Parameters for sorting
-        int leafCountAxis { get { return (int)Mathf.Pow(2, treeLevels); } }
-        int leafCountTotal { get { return leafCountAxis * leafCountAxis * leafCountAxis; } }
+        int leafCountAxis { get { return (int)Mathf.Pow(2, treeLevels-1); } }
+        int leafCountTotal { get { return (int)Mathf.Pow(8, treeLevels-1); } }
         ComputeBuffer sortBuffer; // Buffer for point chunk indices
         ComputeBuffer countBuffer;  // Counts for each chunk
         uint[] nodeOffsets;
@@ -127,11 +127,9 @@ namespace FastPoints {
                 batchBuffer.Release();
 
                 if (pointsCounted == data.PointCount) { // If all points counted, write counts to array and start reading again
-                    currPhase = Phase.WAITING;
-
                     uint[] leafNodeCounts = new uint[leafCountTotal];
                     countBuffer.GetData(leafNodeCounts);
-                    tree = new Octree(treeLevels, leafNodeCounts);
+                    tree = new Octree(treeLevels, data.PointCount, leafNodeCounts, 100000, new AABB(data.MinPoint, data.MaxPoint));
                     
                     TimeSpan currTime = watch.Elapsed;
                     Debug.Log($"[{currTime.ToString()}]: Counting done");
@@ -169,7 +167,7 @@ namespace FastPoints {
                 sortedBuffer.GetData(sortedIndices);
                 pointsSorted += (uint)batch.Length;
 
-                Debug.Log($"Testing sort shader: on point {batch[0].pos.x}, {batch[0].pos.y}, {batch[0].pos.z}, index was {sortedIndices[0]}");
+                // Debug.Log($"Testing sort shader: on point {batch[0].pos.x}, {batch[0].pos.y}, {batch[0].pos.z}, index was {sortedIndices[0]}");
                 // UnityEngine.Debug.Log("Sorted total of " + pointsSorted + " points");
 
                 sortedBatches.Enqueue((batch, sortedIndices));
@@ -179,7 +177,7 @@ namespace FastPoints {
 
                 if (pointsSorted == data.PointCount) {
                     Debug.Log($"[{watch.Elapsed.ToString()}]: Sorting done");
-                    Debug.Log($"Currently {sortedBatches.Count} batches queued to write");
+                    // Debug.Log($"Currently {sortedBatches.Count} batches queued to write");
                     currPhase = Phase.WRITING;
                 }
             }
@@ -286,9 +284,16 @@ namespace FastPoints {
                 }
 
                 Task.WaitAll(tasks.ToArray());
-
-                tree.FlushNodeBuffers();
             });
+
+            await tree.FlushLeafBuffers();
+
+            Debug.Log($"[{watch.Elapsed.ToString()}]: Writing done");
+
+            currPhase = Phase.SUBSAMPLING;
+            await tree.SubsampleTree();
+
+            Debug.Log($"[{watch.Elapsed.ToString()}]: Subsampling done");
 
             currPhase = Phase.DONE;
         }
