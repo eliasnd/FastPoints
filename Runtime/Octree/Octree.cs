@@ -23,6 +23,10 @@ namespace FastPoints {
         OctreeNode root { get { return nodes[0]; } }
         List<OctreeNode> nodes;
 
+        // File writer
+        readonly object fileWriterLock = new object();
+        bool isWriting = false;
+
         public Octree(int treeDepth, int count, uint[] leafNodeCounts, int internalNodeCount, AABB bbox, string dirPath="Assets/octree") {
             this.treeDepth = treeDepth;
             this.dirPath = dirPath;
@@ -39,7 +43,8 @@ namespace FastPoints {
             // Debug.Log(unvisited.Peek());
 
             // Initialize internal nodes
-            Int64 internalOffset = count * 15;
+            Int64 internalOffset = (Int64)count * 15;
+            // Debug.Log($"Internal offset is {internalOffset}");
             for (int l = 0; l < treeDepth-1; l++) {
                 AABB[] layerBBox = bbox.Subdivide((int)Mathf.Pow(2, l));
                 // Debug.Log(unvisited.Count);
@@ -73,6 +78,24 @@ namespace FastPoints {
             }    
 
             // Debug.Log($"Finished building tree with total of {nodes.Count} nodes");
+        }
+
+        public async Task StartFileWriter() {
+            lock (fileWriterLock)
+                isWriting = true;
+
+            await Task.Run(() => {
+                lock (fileWriterLock)
+                    if (!isWriting)
+                        return false;
+
+                    
+            });
+        }
+
+        public void StopFileWriter() {
+            lock (fileWriterLock)
+                isWriting = false;
         }
 
         public async Task WritePoints(Point[] points, uint[] sortedIndices) {

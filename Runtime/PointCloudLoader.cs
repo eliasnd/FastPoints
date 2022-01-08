@@ -2,6 +2,7 @@ using UnityEngine;
 using UnityEditor;
 
 using System;
+using System.Linq;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
@@ -184,7 +185,7 @@ namespace FastPoints {
 
             if (currPhase == Phase.DONE) {
                 watch.Stop();
-                Debug.Log($"[{watch.Elapsed.ToString()}]: Writing done");
+                // Debug.Log($"[{watch.Elapsed.ToString()}]: Writing done");
                 // TODO: Write to pointclouddata
             }
         }

@@ -55,6 +55,8 @@ namespace FastPoints {
             this.offset = offset;
             this.filePath = filePath;
 
+            // Debug.Log($"Initialized internal with {PointCount} points");
+
             this.children = new OctreeNode[8];
             for (int i = 0; i < 8; i++)
                 children[i] = new OctreeNode();
@@ -67,6 +69,8 @@ namespace FastPoints {
             this.count = count;
             this.offset = offset;
             this.filePath = filePath;
+
+            // Debug.Log($"Initialized leaf with {PointCount} points");
             
             BBox = bbox;
             initialized = true;
@@ -155,6 +159,11 @@ namespace FastPoints {
         // Populates points and bbox of internal node
         public async Task PopulateInternal() {
             await Task.Run(async () => {
+                int nonEmptyChildren = 0;
+                foreach (OctreeNode child in children)
+                    if (child.PointCount > 0)
+                        nonEmptyChildren++;
+
                 foreach (OctreeNode child in children) {
                     List<Task> populateChildren = new List<Task>();
 
@@ -166,9 +175,16 @@ namespace FastPoints {
                         
                     Task.WaitAll(populateChildren.ToArray());
 
+                }
+
+                foreach (OctreeNode child in children) {
+                    if (child.PointCount == 0)
+                        continue;
+
                     Point[] childPoints = new Point[child.PointCount];
+                    // Debug.Log($"Count of child is {child.PointCount}");
                     child.ReadPoints(childPoints);
-                    await WritePoints(Sampling.RandomSample(childPoints, count));
+                    await WritePoints(Sampling.RandomSample(childPoints, count / nonEmptyChildren));
                 }
             });
             
