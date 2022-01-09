@@ -23,9 +23,10 @@ namespace FastPoints {
         OctreeNode root { get { return nodes[0]; } }
         List<OctreeNode> nodes;
 
-        // File writer
-        readonly object fileWriterLock = new object();
-        bool isWriting = false;
+        // File IO
+        public bool CanRead { get; private set; }
+        ThreadedWriter tw;
+        FileStream rs; // Read stream
 
         public Octree(int treeDepth, int count, uint[] leafNodeCounts, int internalNodeCount, AABB bbox, string dirPath="Assets/octree") {
             this.treeDepth = treeDepth;
@@ -33,13 +34,15 @@ namespace FastPoints {
             this.bbox = bbox;
 
             string filePath = $"{dirPath}/octree.bin";
-            File.Create(filePath, 4096).Close();
+
+            tw = new ThreadedWriter(filePath);
+            rs = File.Open($"{dirPath}/octree.bin", FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
 
             nodes = new List<OctreeNode>();
 
             // Initialize octree -- Queue gets BFS
             Queue<OctreeNode> unvisited = new Queue<OctreeNode>();
-            unvisited.Enqueue(new OctreeNode());    // Add root node
+            unvisited.Enqueue(new OctreeNode(tw, rs));    // Add root node
             // Debug.Log(unvisited.Peek());
 
             // Initialize internal nodes
@@ -77,26 +80,20 @@ namespace FastPoints {
                 leafOffset += (int)leafNodeCounts[i] * 15;
             }    
 
+            // Create file
+            FileStream fs = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.ReadWrite, 4096);
+            fs.SetLength(
+                ((uint)nodes.Count - (uint)Mathf.Pow(8, treeDepth-1)) * internalNodeCount * 15
+                + (uint)count * 15
+            );
+            fs.Close();
+
+            tw.Start();
+
             // Debug.Log($"Finished building tree with total of {nodes.Count} nodes");
         }
 
-        public async Task StartFileWriter() {
-            lock (fileWriterLock)
-                isWriting = true;
-
-            await Task.Run(() => {
-                lock (fileWriterLock)
-                    if (!isWriting)
-                        return false;
-
-                    
-            });
-        }
-
-        public void StopFileWriter() {
-            lock (fileWriterLock)
-                isWriting = false;
-        }
+        // --- WRITE POINTS --- //
 
         public async Task WritePoints(Point[] points, uint[] sortedIndices) {
             await Task.Run(() => {
@@ -132,12 +129,12 @@ namespace FastPoints {
             await root.PopulateInternal();
         }
 
-        public async Task FlushLeafBuffers() {
+        /*public async Task FlushLeafBuffers() {
             await Task.Run(() => {
                 List<Task> tasks = new List<Task>(LeafNodeTotal);
 
                 for (int i = nodes.Count - LeafNodeTotal; i < nodes.Count; i++)
-                    tasks.Add(nodes[i].FlushBuffer());
+                    tasks.Add(nodes[i].FlushBuffer(tw));
 
                 Task.WaitAll(tasks.ToArray());
             });
@@ -152,9 +149,15 @@ namespace FastPoints {
 
                 Task.WaitAll(tasks.ToArray());
             });
+        }*/
+
+        // --- READ POINTS --- //
+        public async Task InitReading() {
+            await tw.Stop();
+            CanRead = true;
         }
 
-        public void SelectPoints(Camera cam, Point[] target) {
+        /* public void SelectPoints(Camera cam, Point[] target) {
             int idx = 0;
             nodes[0].SelectPoints(target, ref idx, cam);
         }
@@ -165,7 +168,7 @@ namespace FastPoints {
 
         static float DistanceCoefficient(Camera cam, AABB bbox) {
             throw new NotImplementedException();
-        }
+        } */
 
         public OctreeNode GetNode(int idx) {
             return nodes[idx];

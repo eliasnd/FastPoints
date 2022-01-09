@@ -32,6 +32,8 @@ namespace FastPoints {
 
         #region io
         bool initialized = false;
+        FileStream fs;
+        ThreadedWriter tw;
         string filePath = "";
         Int64 offset; // Offset into file in bytes
         int bytesWritten = 0;
@@ -44,10 +46,9 @@ namespace FastPoints {
         int writeBufferIdx = 0;
         #endregion
 
-        public OctreeNode() {}
-
-        public OctreeNode(int count, Int64 offset, string filePath, AABB bbox) {
-            InitializeLeaf(count, offset, filePath, bbox);
+        public OctreeNode(ThreadedWriter tw, FileStream fs) {
+            this.tw = tw;
+            this.fs = fs;
         }
 
         public void InitializeInternal(int count, Int64 offset, string filePath, AABB bbox) {
@@ -59,7 +60,7 @@ namespace FastPoints {
 
             this.children = new OctreeNode[8];
             for (int i = 0; i < 8; i++)
-                children[i] = new OctreeNode();
+                children[i] = new OctreeNode(tw, fs);
 
             BBox = bbox;
             initialized = true;
@@ -79,74 +80,30 @@ namespace FastPoints {
         // Writes points to buffer. Writes buffer to file if forcewrite = true or if buffer over given size
         // Passing forceWrite with no points will write buffer, but not add anything
         public async Task WritePoints(Point[] points) {
+            if (pointsWritten + points.Length > count)
+                throw new Exception($"Trying to write {points.Length} points to node with {count-pointsWritten} remaining points allocated");
+
             await Task.Run(() => {
-                if (pointsWritten + points.Length > count)
-                    throw new Exception($"Trying to write {points.Length} points to node with {count-pointsWritten} remaining points allocated");
+                byte[] bytes = Point.ToBytes(points);
 
-                lock (writeLock) {
-                    BinaryWriter bw = new BinaryWriter(File.Open(filePath, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite));
-                    try {
-                        bw.BaseStream.Seek(offset + bytesWritten, SeekOrigin.Begin);
-                    } catch {
-                        throw new Exception($"Error trying to seek offset {offset} + bytesWritten {bytesWritten} = {offset+bytesWritten}");
-                    }
-                    
-
-                    foreach (Point pt in points) {
-                        try {
-                            foreach (byte b in pt.ToBytes()) {
-                                writeBuffer[writeBufferIdx] = b;
-                                writeBufferIdx++;
-
-                                // Flush buffer
-                                if (writeBufferIdx == writeBufferSize) {
-                                    bw.Write(writeBuffer, 0, writeBufferIdx);
-                                    bytesWritten += writeBufferIdx;
-                                    writeBufferIdx = 0;
-                                }
-                            }
-                        } catch {
-                            throw new Exception($"Exception while writing points, writeBufferIdx is {writeBufferIdx}");
-                        }
-                    }
-
-                    bw.Close();
-                }
-
-                
-            });
-        }
-
-        public void Expand() {
-            children = new OctreeNode[8];
-        }
-
-        public async Task FlushBuffer() {
-            await Task.Run(() => {
-                if (writeBufferIdx == 0)
-                    return;
-                    // throw new Exception("Trying to flush empty buffer!");
-
-                lock (writeLock) {
-                    BinaryWriter bw = new BinaryWriter(File.Open(filePath, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite));
-                    bw.BaseStream.Seek(offset + bytesWritten, SeekOrigin.Begin); 
-                    bw.Write(writeBuffer, 0, writeBufferIdx);
-                    bytesWritten += writeBufferIdx;
-                    writeBufferIdx = 0;
-                    bw.Close();
-                }
+                tw.Write((uint)(offset + bytesWritten), bytes);
+                bytesWritten += bytes.Length;
             });
         }
 
         public async Task ReadPoints(Point[] target, int idx=0) {
             if (!AllPointsWritten)
                 throw new Exception("Cannot read points before writing finished!");
-                
-            await Task.Run(() => {
-                BinaryReader br = new BinaryReader(File.Open(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite));
 
-                for (int i = 0; i < count; i++)
-                    target[idx+i] = new Point(br.ReadBytes(15));
+            await Task.Run(() => {
+                byte[] bytes = new byte[target.Length * 15];
+
+                lock (fs) {
+                    fs.Seek(offset, SeekOrigin.Current);
+                    fs.Read(bytes, 0, bytes.Length);
+                }
+
+                Point.ToPoints(bytes, target);
             });
         }
 
@@ -164,6 +121,7 @@ namespace FastPoints {
                     if (child.PointCount > 0)
                         nonEmptyChildren++;
 
+                // Populate any non-populated internal children
                 foreach (OctreeNode child in children) {
                     List<Task> populateChildren = new List<Task>();
 
@@ -177,6 +135,7 @@ namespace FastPoints {
 
                 }
 
+                // Read points
                 foreach (OctreeNode child in children) {
                     if (child.PointCount == 0)
                         continue;
@@ -191,7 +150,7 @@ namespace FastPoints {
         }
 
         // Traverses tree DFS and populates target array. Need to implement point budget.
-        public void SelectPoints(Point[] target, ref int idx, Camera cam) {
+        /* public void SelectPoints(Point[] target, ref int idx, Camera cam) {
             if (!Intersects(cam))
                 return;
 
@@ -210,6 +169,6 @@ namespace FastPoints {
 
         float DistanceCoefficient(Camera cam) {
             throw new NotImplementedException();
-        }
+        } */
     }
 }

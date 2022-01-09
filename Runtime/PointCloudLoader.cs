@@ -64,7 +64,6 @@ namespace FastPoints {
         public void Start() {
             // Load compute shader
             computeShader = (ComputeShader)Resources.Load("CountAndSort");
-            Mathf.Pow(Mathf.Pow(2, treeLevels-1), 3);
             maxQueued  = (int)((32 * Mathf.Pow(1024, 2)) / (batchSize * System.Runtime.InteropServices.Marshal.SizeOf<Point>()));
         }
 
@@ -73,6 +72,7 @@ namespace FastPoints {
                 currPhase = Phase.NONE;
                 pointsCounted = 0;
                 pointsSorted = 0;
+                pointsWritten = 0;
                 return;
             }
 
@@ -178,7 +178,6 @@ namespace FastPoints {
 
                 if (pointsSorted == data.PointCount) {
                     Debug.Log($"[{watch.Elapsed.ToString()}]: Sorting done");
-                    // Debug.Log($"Currently {sortedBatches.Count} batches queued to write");
                     currPhase = Phase.WRITING;
                 }
             }
@@ -287,12 +286,10 @@ namespace FastPoints {
                 Task.WaitAll(tasks.ToArray());
             });
 
-            await tree.FlushLeafBuffers();
-
             Debug.Log($"[{watch.Elapsed.ToString()}]: Writing done");
 
             currPhase = Phase.SUBSAMPLING;
-            await tree.SubsampleTree();
+            tree.InitReading();
 
             Debug.Log($"[{watch.Elapsed.ToString()}]: Subsampling done");
 
