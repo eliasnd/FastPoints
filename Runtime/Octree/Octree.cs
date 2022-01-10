@@ -12,183 +12,28 @@ namespace FastPoints {
     // Eventually add dynamic level increases like Potree 2.0
 
     public class Octree {
-        int count;
-        int treeDepth;  // Number of layers in tree - treeDepth = 1 has only root node
-        public int TreeDepth { get { return treeDepth; } }
-        public int LeafNodeAxis { get { return (int)Mathf.Pow(2, treeDepth-1); } }
-        public int LeafNodeTotal { get { return (int)Mathf.Pow(8, treeDepth-1); } }
-        
-        AABB bbox;
+        ConcurrentQueue<Action> unityActions;   // Used for sending compute shader calls to main thread
+        int treeDepth;
         string dirPath;
-        OctreeNode root { get { return nodes[0]; } }
-        List<OctreeNode> nodes;
-
-        // File IO
-        public bool CanRead { get; private set; }
-        ThreadedWriter tw;
-        FileStream rs; // Read stream
-
-        public Octree(int treeDepth, int count, uint[] leafNodeCounts, int internalNodeCount, AABB bbox, string dirPath="Assets/octree") {
+        public Octree(int treeDepth, string dirPath, ConcurrentQueue<Action> unityActions) {
             this.treeDepth = treeDepth;
+            this.unityActions = unityActions;
             this.dirPath = dirPath;
-            this.bbox = bbox;
-
-            string filePath = $"{dirPath}/octree.bin";
-
-            tw = new ThreadedWriter(filePath);
-            rs = File.Open($"{dirPath}/octree.bin", FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-
-            nodes = new List<OctreeNode>();
-
-            // Initialize octree -- Queue gets BFS
-            Queue<OctreeNode> unvisited = new Queue<OctreeNode>();
-            unvisited.Enqueue(new OctreeNode(tw, rs));    // Add root node
-            // Debug.Log(unvisited.Peek());
-
-            // Initialize internal nodes
-            Int64 internalOffset = (Int64)count * 15;
-            // Debug.Log($"Internal offset is {internalOffset}");
-            for (int l = 0; l < treeDepth-1; l++) {
-                AABB[] layerBBox = bbox.Subdivide((int)Mathf.Pow(2, l));
-                // Debug.Log(unvisited.Count);
-
-                for (int n = 0; n < Mathf.Pow(8, l); n++) {
-                    OctreeNode curr = unvisited.Dequeue();
-
-                    // Debug.Log(curr);
-                    // Debug.Log(layerBBox[n]);
-                    curr.InitializeInternal(internalNodeCount, internalOffset, filePath, layerBBox[n]);
-                    nodes.Add(curr);
-                    internalOffset += internalNodeCount * 15;
-
-                    for (int c = 0; c < 8; c++)
-                        unvisited.Enqueue(curr.GetChild(c));
-                }
-            }
-
-            // Initialize leaf nodes
-
-            Int64 leafOffset = 0;
-
-            AABB[] leafBBox = bbox.Subdivide(LeafNodeAxis);
-
-            for (int i = 0; i < LeafNodeTotal; i++) {
-                OctreeNode leaf = unvisited.Dequeue();
-
-                leaf.InitializeLeaf((int)leafNodeCounts[i], leafOffset, filePath, leafBBox[i]);
-                nodes.Add(leaf);
-                leafOffset += (int)leafNodeCounts[i] * 15;
-            }    
-
-            // Create file
-            FileStream fs = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.ReadWrite, 4096);
-            fs.SetLength(
-                ((uint)nodes.Count - (uint)Mathf.Pow(8, treeDepth-1)) * internalNodeCount * 15
-                + (uint)count * 15
-            );
-            fs.Close();
-
-            tw.Start();
-
-            // Debug.Log($"Finished building tree with total of {nodes.Count} nodes");
         }
 
-        // --- WRITE POINTS --- //
-
-        public async Task WritePoints(Point[] points, uint[] sortedIndices) {
-            await Task.Run(() => {
-                Dictionary<int, List<Point>> sorted = new Dictionary<int, List<Point>>();
-                for (int i = 0; i < points.Length; i++) {
-                    if (!sorted.ContainsKey((int)sortedIndices[i]))
-                        sorted.Add((int)sortedIndices[i], new List<Point>());
-
-                    sorted[(int)sortedIndices[i]].Add(points[i]);
-                }
-
-                List<Task> tasks = new List<Task>();
-
-
-                foreach (int nidx in sorted.Keys) {
-                    try {
-                        tasks.Add(GetLeafNode(nidx).WritePoints(sorted[nidx].ToArray()));
-                    } catch {
-                        throw new Exception($"Error adding task for leaf {nidx} with index {nodes.Count - LeafNodeTotal + nidx}");
-                    }
-                }
-
-                Task.WaitAll(tasks.ToArray());
-            });
-            
-        }
-
-        // Populate all inner nodes - requires all leaf nodes to be fully written
-        public async Task SubsampleTree() {
-            if (root.Type == OctreeNode.NodeType.LEAF)
-                return;
-
-            await root.PopulateInternal();
-        }
-
-        /*public async Task FlushLeafBuffers() {
-            await Task.Run(() => {
-                List<Task> tasks = new List<Task>(LeafNodeTotal);
-
-                for (int i = nodes.Count - LeafNodeTotal; i < nodes.Count; i++)
-                    tasks.Add(nodes[i].FlushBuffer(tw));
-
-                Task.WaitAll(tasks.ToArray());
-            });
-        }
-
-        public async Task FlushInternalBuffers() {
-            await Task.Run(() => {
-                List<Task> tasks = new List<Task>(LeafNodeTotal);
-
-                for (int i = 0; i < nodes.Count - LeafNodeTotal; i++)
-                    tasks.Add(nodes[i].FlushBuffer());
-
-                Task.WaitAll(tasks.ToArray());
-            });
-        }*/
-
-        // --- READ POINTS --- //
-        public async Task InitReading() {
-            await tw.Stop();
-            CanRead = true;
-        }
-
-        /* public void SelectPoints(Camera cam, Point[] target) {
-            int idx = 0;
-            nodes[0].SelectPoints(target, ref idx, cam);
-        }
-
-        static bool Intersects(Camera cam, AABB bbox) {
+        public void BuildTree() {
             throw new NotImplementedException();
         }
+    }
 
-        static float DistanceCoefficient(Camera cam, AABB bbox) {
-            throw new NotImplementedException();
-        } */
+    struct BuildTreeParams {
+        string dirPath;
+        int treeDepth;
 
-        public OctreeNode GetNode(int idx) {
-            return nodes[idx];
-        }
 
-        public OctreeNode GetLeafNode(int idx) {
-            return nodes[nodes.Count - LeafNodeTotal + idx];
-        }
-
-        public OctreeNode GetLeafNode(int x, int y, int z) {
-            return nodes[nodes.Count - LeafNodeTotal + LeafNodeAxis * LeafNodeAxis * x + LeafNodeAxis * y + z];
-        }
-
-        /*
-        -- Hierarchy Format --
-        byte treeDepth
-        */
-        public void WriteHierarchy() {
-            string filePath = $"{dirPath}/hierarchy.bin";
-            BinaryWriter bw = new BinaryWriter(File.Create(filePath));
+        public BuildTreeParams(string dirPath, int treeDepth) {
+            this.dirPath = dirPath;
+            this.treeDepth = treeDepth;
         }
     }
 }
