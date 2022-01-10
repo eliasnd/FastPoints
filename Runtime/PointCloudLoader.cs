@@ -58,6 +58,7 @@ namespace FastPoints {
         } }
 
         Stopwatch watch;
+        TimeSpan totalTime;
 
         Octree tree;
 
@@ -102,7 +103,8 @@ namespace FastPoints {
                 if (BoundsPopulated) { // If bounds populated for first time, send to shaders and 
                     computeShader.SetFloats("_MinPoint", new float[] { data.MinPoint.x-1E-5f, data.MinPoint.y-1E-5f, data.MinPoint.z-1E-5f });
                     computeShader.SetFloats("_MaxPoint", new float[] { data.MaxPoint.x+1E-5f, data.MaxPoint.y+1E-5f, data.MaxPoint.z+1E-5f });
-                    Debug.Log($"[{watch.Elapsed.ToString()}]: Reading done");
+
+                    Checkpoint("Reading done");
                     currPhase = Phase.COUNTING;
                 }
             }
@@ -132,8 +134,7 @@ namespace FastPoints {
                     countBuffer.GetData(leafNodeCounts);
                     tree = new Octree(treeLevels, data.PointCount, leafNodeCounts, 100000, new AABB(data.MinPoint, data.MaxPoint));
                     
-                    TimeSpan currTime = watch.Elapsed;
-                    Debug.Log($"[{currTime.ToString()}]: Counting done");
+                    Checkpoint("Counting done");
 
                     data.LoadPointBatches(batchSize, pointBatches, false);  // pointBatches now empty, but don't need to repopulate bounds
                     WritePoints(leafNodeCounts);
@@ -177,13 +178,12 @@ namespace FastPoints {
                 sortedBuffer.Release();
 
                 if (pointsSorted == data.PointCount) {
-                    Debug.Log($"[{watch.Elapsed.ToString()}]: Sorting done");
+                    Checkpoint("Sorting done");
                     currPhase = Phase.WRITING;
                 }
             }
 
             if (currPhase == Phase.DONE) {
-                watch.Stop();
                 // Debug.Log($"[{watch.Elapsed.ToString()}]: Writing done");
                 // TODO: Write to pointclouddata
             }
@@ -209,6 +209,8 @@ namespace FastPoints {
 
             watch = new Stopwatch();
             watch.Start();
+            totalTime = watch.Elapsed;
+            
             Debug.Log($"[{watch.Elapsed.ToString()}]: Starting");
         }
 
@@ -286,14 +288,25 @@ namespace FastPoints {
                 Task.WaitAll(tasks.ToArray());
             });
 
-            Debug.Log($"[{watch.Elapsed.ToString()}]: Writing done");
+            Checkpoint("Writing done");
 
             currPhase = Phase.SUBSAMPLING;
-            tree.InitReading();
+            tree.SubsampleTree();
 
-            Debug.Log($"[{watch.Elapsed.ToString()}]: Subsampling done");
+            Checkpoint("Subsampling done");
 
             currPhase = Phase.DONE;
+
+            watch.Stop();
+
+            Checkpoint($"All done. Average points / sec: {data.PointCount / (watch.ElapsedMilliseconds / 1000f)}");
+        }
+
+        void Checkpoint(string message) {
+            watch.Stop();
+            totalTime = totalTime.Add(watch.Elapsed);
+            Debug.Log($"[{totalTime.ToString("c")} ({watch.Elapsed.ToString("c")} since last checkpoint)]: {message}");
+            watch.Restart();
         }
     }
 }

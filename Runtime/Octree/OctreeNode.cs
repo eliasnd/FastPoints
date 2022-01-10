@@ -86,7 +86,7 @@ namespace FastPoints {
             await Task.Run(() => {
                 byte[] bytes = Point.ToBytes(points);
 
-                tw.Write((uint)(offset + bytesWritten), bytes);
+                while (!tw.Write((uint)(offset + bytesWritten), bytes)) {};
                 bytesWritten += bytes.Length;
             });
         }

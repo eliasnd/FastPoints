@@ -7,8 +7,9 @@ namespace FastPoints {
     public class ThreadedWriter {
         string path;
         ConcurrentQueue<(uint, byte[])> queue;
+        int maxLength = 150;
         (ThreadParams p, Thread t)[] threads;
-        int threadCount = 10;
+        int threadCount = 100;
         readonly object writingLock = new object();
         bool writing;
         public bool IsWriting { get { return writing; } }
@@ -53,8 +54,12 @@ namespace FastPoints {
             });
         }
 
-        public void Write(uint idx, byte[] bytes) {
+        public bool Write(uint idx, byte[] bytes) {
+            if (queue.Count >= maxLength)
+                return false;
+
             queue.Enqueue((idx, bytes));
+            return true;
         }
 
         static void WriteThread(object obj) {
