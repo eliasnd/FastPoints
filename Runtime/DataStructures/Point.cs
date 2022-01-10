@@ -6,6 +6,7 @@ using System.Runtime.InteropServices;
 namespace FastPoints {
     [StructLayout(LayoutKind.Sequential), Serializable]
     public struct Point {
+        public const int size = 15;
         public Vector3 pos;
         public Color col;
 

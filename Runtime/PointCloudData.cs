@@ -35,8 +35,9 @@ namespace FastPoints {
         public bool DecimatedGenerated { get { return decimatedGenerated; } }
 
         [SerializeField]
-        bool treeGenerated = false; // True if tree generation is complete; if not, Renderer uses decimated point cloud
-        public bool TreeGenerated { get { return treeGenerated; } }
+        public string TreePath = ""; // True if tree generation is complete; if not, Renderer uses decimated point cloud
+        public bool TreeGenerated { get { return treePath != ""; } }
+
 
         public void Initialize() {
             BaseStream stream = handle.GetStream();
@@ -62,8 +63,8 @@ namespace FastPoints {
         }
 
         public async Task LoadPointBatches(int batchSize, ConcurrentQueue<Point[]> batches, bool populateBoundsAsync = false) {
-            // Maximum allow queue of 32 MB (8 * 1024^2 bytes)
-            int maxQueued = (int)((32 * Mathf.Pow(1024, 2)) / (batchSize * System.Runtime.InteropServices.Marshal.SizeOf<Point>()));
+            // Maximum allow queue of 32 MB
+            int maxQueued = (32 * MB) / (batchSize * Point.size);
             BaseStream stream = handle.GetStream();
 
             Task t1 = Task.Run(() => {
@@ -71,7 +72,7 @@ namespace FastPoints {
                     Point[] batch = new Point[batchSize];
                     stream.ReadPoints(batchSize, batch);
                     batches.Enqueue(batch);                    
-                    while (batches.Count >= maxQueued) {}   // Wait for queue to empty enough for new batch
+                    while (batches.Count >= maxQueued) Thread.Sleep(75);   // Wait for queue to empty enough for new batch
                 }
 
                 Point[] lastBatch = new Point[count % batchSize];
@@ -91,12 +92,12 @@ namespace FastPoints {
 
                     Point[] batch = new Point[batchSize];
                     for (int i = 0; i < count / batchSize; i++) {
-                        scanStream.ReadPoints(batchSize, batch);
+                        scanStream.ReadPoints(batchSize, batch, true);
                         Debug.Log($"Scanning batch {i+1}/{(int)(count / batchSize)}");
                     }
 
                     batch = new Point[count % batchSize];
-                    scanStream.ReadPoints(count % batchSize, batch);
+                    scanStream.ReadPoints(count % batchSize, batch, true);
 
                     Debug.Log($"Scanning batch {(int)(count / batchSize)}/{(int)(count / batchSize)}");
 
@@ -109,6 +110,10 @@ namespace FastPoints {
 
             await t2;
             await t1;
+        }
+
+        public void SetOctreePath(string path) {
+            treePath = path;
         }
     }
 }
