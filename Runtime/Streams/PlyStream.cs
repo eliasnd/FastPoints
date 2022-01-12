@@ -13,6 +13,7 @@ namespace FastPoints {
 
         Vector3 currMinPoint;
         Vector3 currMaxPoint;
+        bool computeBounds=false;
 
         enum Format {
             INVALID,
@@ -52,9 +53,10 @@ namespace FastPoints {
             currMaxPoint = new Vector3(float.MinValue, float.MinValue, float.MinValue);
 
             ReadHeader();
+            Debug.Log("Read header");
         }
 
-        public override bool ReadPoints(int pointCount, Point[] target, bool computeBounds=false) {
+        public override bool ReadPoints(int pointCount, Point[] target) {
             if (format == Format.INVALID)
                 ReadHeader();
 
@@ -65,11 +67,11 @@ namespace FastPoints {
                 // pointCount = count - index;
 
             index += pointCount;
-
+            byte[] bytes;
 
             switch (format) {
                 case Format.BINARY_LITTLE_ENDIAN:
-                    byte[] bytes = bReader.ReadBytes(pointSize * pointCount);
+                    bytes = bReader.ReadBytes(pointSize * pointCount);
                     if (computeBounds)
                         for (int i = 0; i < pointCount; i++) {
                             target[i] = ReadPointBLE(bytes, i*pointSize);
@@ -87,7 +89,7 @@ namespace FastPoints {
 
                     return true;
                 case Format.BINARY_BIG_ENDIAN:
-                    byte[] bytes = bReader.ReadBytes(pointSize * pointCount);
+                    bytes = bReader.ReadBytes(pointSize * pointCount);
                     if (computeBounds)
                         for (int i = 0; i < pointCount; i++) {
                             target[i] = ReadPointBBE(bytes, i*pointSize);
@@ -148,7 +150,7 @@ namespace FastPoints {
                     case Format.BINARY_BIG_ENDIAN:
                         for (int i = 0; i < pointCount; i++) {
                             readBinaryPoints.Enqueue(bReader.ReadBytes(pointSize));
-                            stream.Seek(lineLength * (interval - 1), SeekOrigin.Current);
+                            stream.Seek(pointSize * (interval - 1), SeekOrigin.Current);
                         }
                         allPointsRead = true;
                         break;
@@ -383,6 +385,10 @@ namespace FastPoints {
             }
 
             return count;
+        }
+
+        public void SetComputeBounds(bool val) {
+            computeBounds = val;
         }
     }
 }

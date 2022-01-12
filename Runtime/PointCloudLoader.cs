@@ -25,38 +25,61 @@ namespace FastPoints {
         #endregion
 
         ConcurrentQueue<Action> actions;
+        ComputeShader computeShader;
         Octree tree;
         Thread treeThread;
+        PointCloudData oldData = null;
 
         public void Start() {
             actions = new ConcurrentQueue<Action>();
+            Debug.Log(actions);
+            computeShader = (ComputeShader)Resources.Load("CountAndSort");
         }
 
         public void Update() {
-            if (!generateTree) {
+
+            void ResetTree() {
+                treeThread.Abort(); // Eventually clean up files here
                 tree = null;
+                treeThread = null;
+            }
+
+            if (data == null) {     // If no data
+                if (tree != null)
+                    ResetTree();
                 return;
             }
 
-            if (data == null) {
-                tree = null;
-                treeThread.Abort(); // Should probably do some cleanup here
-                treeThread = null;
-                return;
+            if (!generateTree && tree != null) {    // If not set to generate tree
+                ResetTree();
             }
-            else if (tree == null) {    // Start building tree
-                tree = new Octree(treeLevels, "Resources/Octree", actions);
-                treeThread = new Thread(new ParameterizedThreadStart(BuildTreeThread));
-                treeThread.Start(new BuildTreeParams(tree));
+
+            if (data != oldData) {  // If new data put in
+                if (tree != null) 
+                    ResetTree();
+
+                if (!data.Init)
+                    data.Initialize();
+                if (!data.DecimatedGenerated)
+                    data.PopulateSparseCloud(decimatedCloudSize);
+
+                if (generateTree) {
+                    tree = new Octree(treeLevels, "Resources/Octree", actions);
+                    treeThread = new Thread(new ParameterizedThreadStart(BuildTreeThread));
+                    treeThread.Start(new BuildTreeParams(tree, data));
+                }
             }
 
             if (actions.Count > 0) {
-                Action action = actions.Dequeue();
+                Action action;
+                actions.TryDequeue(out action);
                 action();
             }
 
             if (!treeThread.IsAlive)
-                
+                data.TreePath = "Resources/Octree";
+
+            oldData = data;
         }
 
         public void OnDrawGizmos() {
@@ -94,15 +117,9 @@ namespace FastPoints {
             }
         }
 
-        static void BuildTreeThread(Object obj) {
-            ((BuildTreeParams)obj).tree.BuildTree();
-        }
-    }
-
-    struct BuildTreeParams {
-        public Octree tree;
-        public BuildTreeParams(Octree tree) {
-            this.tree = tree;
+        static void BuildTreeThread(object obj) {
+            BuildTreeParams p = (BuildTreeParams)obj;
+            p.tree.BuildTree(p.data);
         }
     }
 }

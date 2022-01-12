@@ -36,10 +36,11 @@ namespace FastPoints {
 
         [SerializeField]
         public string TreePath = ""; // True if tree generation is complete; if not, Renderer uses decimated point cloud
-        public bool TreeGenerated { get { return treePath != ""; } }
+        public bool TreeGenerated { get { return TreePath != ""; } }
 
 
         public void Initialize() {
+            Debug.Log("Initialize");
             BaseStream stream = handle.GetStream();
             count = stream.PointCount;
 
@@ -64,7 +65,7 @@ namespace FastPoints {
 
         public async Task LoadPointBatches(int batchSize, ConcurrentQueue<Point[]> batches, bool populateBoundsAsync = false) {
             // Maximum allow queue of 32 MB
-            int maxQueued = (32 * MB) / (batchSize * Point.size);
+            int maxQueued = (32 * Utils.MB) / (batchSize * Point.size);
             BaseStream stream = handle.GetStream();
 
             Task t1 = Task.Run(() => {
@@ -88,16 +89,19 @@ namespace FastPoints {
             // Async bounds
             Task t2 = Task.Run(() => {
                 if (populateBoundsAsync && handle.Type == PointCloudHandle.FileType.PLY) {
-                    BaseStream scanStream = handle.GetStream();
+                    PlyStream scanStream = (PlyStream)handle.GetStream();
+                    scanStream.SetComputeBounds(true);
+
+                    Debug.Log("Set compute bounds");
 
                     Point[] batch = new Point[batchSize];
                     for (int i = 0; i < count / batchSize; i++) {
-                        scanStream.ReadPoints(batchSize, batch, true);
+                        scanStream.ReadPoints(batchSize, batch);
                         Debug.Log($"Scanning batch {i+1}/{(int)(count / batchSize)}");
                     }
 
                     batch = new Point[count % batchSize];
-                    scanStream.ReadPoints(count % batchSize, batch, true);
+                    scanStream.ReadPoints(count % batchSize, batch);
 
                     Debug.Log($"Scanning batch {(int)(count / batchSize)}/{(int)(count / batchSize)}");
 
@@ -110,10 +114,6 @@ namespace FastPoints {
 
             await t2;
             await t1;
-        }
-
-        public void SetOctreePath(string path) {
-            treePath = path;
         }
     }
 }

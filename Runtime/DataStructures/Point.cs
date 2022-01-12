@@ -10,11 +10,6 @@ namespace FastPoints {
         public Vector3 pos;
         public Color col;
 
-        public Point(float x, float y, float z, int col) {
-            pos = new Vector3(x, y, z);
-            this.col = Utils.IntToColor(col);
-        }
-
         public Point(byte[] bytes) {
             pos = new Vector3(
                 BitConverter.ToSingle(bytes, 0),

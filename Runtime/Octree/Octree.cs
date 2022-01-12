@@ -13,27 +13,222 @@ namespace FastPoints {
 
     public class Octree {
         ConcurrentQueue<Action> unityActions;   // Used for sending compute shader calls to main thread
+        ComputeShader computeShader = (ComputeShader)Resources.Load("CountAndSort");
         int treeDepth;
         string dirPath;
+
+        // Construction params
+        int batchSize = 100000;  // Size of batches for reading and running shader
         public Octree(int treeDepth, string dirPath, ConcurrentQueue<Action> unityActions) {
             this.treeDepth = treeDepth;
             this.unityActions = unityActions;
             this.dirPath = dirPath;
         }
 
-        public void BuildTree() {
-            throw new NotImplementedException();
+        public async Task BuildTree(PointCloudData data) {
+            ConcurrentQueue<Point[]> readQueue = new ConcurrentQueue<Point[]>();
+            Task loadTask = data.LoadPointBatches(batchSize, readQueue, true);
+
+            int chunkDepth = 7;
+            int chunkGridSize = (int)Mathf.Pow(2, chunkDepth);
+            ComputeBuffer chunkGridBuffer = new ComputeBuffer(chunkGridSize * chunkGridSize * chunkGridSize, sizeof(UInt32));
+
+            // 4096 threads per shader pass call
+            int threadBudget = Mathf.CeilToInt(batchSize / 4096f);
+
+            while (data.MinPoint.x >= data.MaxPoint.x || data.MinPoint.y >= data.MaxPoint.y || data.MinPoint.z >= data.MaxPoint.z)
+                Thread.Sleep(300);  // Block until bounds populated
+
+            float[] minPoint = new float[] { data.MinPoint.x-1E-5f, data.MinPoint.y-1E-5f, data.MinPoint.z-1E-5f };
+            float[] maxPoint = new float[] { data.MaxPoint.x+1E-5f, data.MaxPoint.y+1E-5f, data.MaxPoint.z+1E-5f };
+            
+            // Initialize compute shader
+            unityActions.Enqueue(() => {
+                computeShader.SetFloats("_MinPoint", minPoint);
+                computeShader.SetFloats("_MaxPoint", maxPoint);
+
+                computeShader.SetInt("_ChunkCount", chunkGridSize * chunkGridSize * chunkGridSize);
+                computeShader.SetBuffer(computeShader.FindKernel("CountPoints"), "_Counts", chunkGridBuffer);
+                computeShader.SetInt("_ThreadCount", threadBudget);
+            });
+
+            // Counting loop
+            while (loadTask.Status == TaskStatus.Running || readQueue.Count > 0) {
+                Point[] batch;
+                while (!readQueue.TryDequeue(out batch))
+                    Thread.Sleep(300);
+
+                ComputeBuffer batchBuffer = new ComputeBuffer(batchSize, Point.size);
+                batchBuffer.SetData(batch);
+
+                unityActions.Enqueue(() => {
+                    int countHandle = computeShader.FindKernel("CountPoints");
+                    computeShader.SetBuffer(countHandle, "_Points", batchBuffer);
+                    computeShader.SetInt("_BatchSize", batch.Length);
+                    computeShader.Dispatch(countHandle, 64, 1, 1);
+
+                    batchBuffer.Release();
+                });
+            }
+
+            readQueue.Clear();
+            loadTask = data.LoadPointBatches(batchSize, readQueue, true);   // Start loading to get headstart while merging
+
+            // Merge sparse chunks
+
+            List<Chunk> chunks;
+
+            int sparseChunkCutoff = 1000000;    // Any chunk with more than sparseChunkCutoff points is written to disk
+
+            uint[] levelGrid = new uint[chunkGridSize * chunkGridSize * chunkGridSize];
+            chunkGridBuffer.GetData(grid);
+
+            for (int level = chunkDepth; level > 0; level--) {
+                int levelGridSize = Mathf.Pow(levelGrid.Length, 1/3f);
+
+                var levelGridIndex = (int x, int y, int z) => levelGrid[x * levelGridSize * levelGridSize + y * levelGridSize + z];
+
+                uint[] nextLevelGrid = new uint[(levelGridSize-1) * (levelGridSize-1) * (levelGridSize-1)];
+
+                for (int x = 0; x < levelGridSize; x+=2)
+                    for (int y = 0; y < levelGridSize; y+=2)
+                        for (int z = 0; z < levelGridSize; z+=2) {
+                            var addChunks = () => {
+                                chunks.Add(new Chunk(x, y, z, level)); chunks.Add(new Chunk(x, y, z+1, level));
+                                chunks.Add(new Chunk(x, y+1, z, level)); chunks.Add(new Chunk(x, y+1, z+1, level));
+                                chunks.Add(new Chunk(x+1, y, z, level)); chunks.Add(new Chunk(x+1, y, z+1, level));
+                                chunks.Add(new Chunk(x+1, y+1, z, level)); chunks.Add(new Chunk(x+1, y+1, z+1, level));
+                                nextLevelGrid[gridIndex(x/2, y/2, z/2)] = UInt32.MaxValue;
+                            };
+
+                            // If any chunks in cube previously added
+                            if (levelGridIndex(x, y, z) == UInt32.MaxValue || levelGridIndex(x, y, z+1) == UInt32.MaxValue ||
+                                levelGridIndex(x, y+1, z) == UInt32.MaxValue || levelGridIndex(x, y+1, z+1) == UInt32.MaxValue ||
+                                levelGridIndex(x+1, y, z) == UInt32.MaxValue || levelGridIndex(x+1, y, z+1) == UInt32.MaxValue ||
+                                levelGridIndex(x+1, y+1, z) == UInt32.MaxValue || levelGridIndex(x+1, y+1, z+1) == UInt32.MaxValue) {
+                                addChunks();
+                            }
+
+                            uint cubeSum =  
+                                levelGridIndex(x, y, z) + levelGridIndex(x, y, z+1) + 
+                                levelGridIndex(x, y+1, z) + levelGridIndex(x, y+1, z+1) + 
+                                levelGridIndex(x+1, y, z) + levelGridIndex(x+1, y, z+1) + 
+                                levelGridIndex(x+1, y+1, z) + levelGridIndex(x+1, y+1, z+1);
+
+                            // If cube below threshold
+                            if (cubeSum < sparseChunkCutoff)
+                                nextLevelGrid[gridIndex(x/2, y/2, z/2)] = cubeSum;
+                            else
+                                addChunks();
+                        }
+
+                levelGrid = nextLevelGrid;
+            }
+
+            // Create lookup table
+            int[] lut = new int[chunkGridSize * chunkGridSize * chunkGridSize];
+            for (int i = 0; i < chunks.Count; i++) {
+                Chunk chunk = chunks[i];
+
+                if (chunk.level == chunkDepth)
+                    lut[chunk.x * chunkGridSize * chunkGridSize + chunk.y * chunkGridSize + chunk.z] = i;
+                else {
+                    int chunkSize = Mathf.Pow(2, chunkDepth-chunk.level);
+                    for (int x = chunk.x * chunkSize; x < (chunk.x + 1) * chunkSize; x++)
+                        for (int y = chunk.y * chunkSize; y < (chunk.y + 1) * chunkSize; y++)
+                            for (int z = chunk.z * chunkSize; z < (chunk.z + 1) * chunkSize; z++)
+                                lut[x * chunkGridSize * chunkGridSize + y * chunkGridSize + z] = i;
+                }
+            }
+
+            // Create chunk files
+            Directory.CreateDirectory($"{dirPath}/tmp");
+
+            FileStream[] chunkStreams = new FileStream[];
+            List<Point>[] chunkBuffers = new List<Point>[chunks.Count];
+
+            for (int i = 0; i < chunks.Count; i++) {
+                Chunk chunk = chunks[i];
+                chunkStreams[i] = File.Create($"{dirPath}/tmp/chunk_{chunk.x}_{chunk.y}_{chunk.z}_l{chunk.level}");
+                chunkBuffers[i] = new List<Point>();
+            }
+
+            // Distribute points
+            ConcurrentQueue<(Point[], uint[])> sortedBatches;
+            int maxSorted = 100;
+
+            // Start writing
+            bool allDistributed = false;
+            Task writeChunksTask = Task.Run(() => {
+                while (!allDistributed || sortedBatches.Count > 0) {
+                    (Point[] batch, uint[] indices) tup;
+                    while (!sortedBatches.TryDequeue(out tup))
+                        Thread.Sleep(300);
+
+                    for (int i = 0; i < tup.batch.Length; i++) {
+                        int chunkIdx = lut[tup.indices[i]];
+                        chunkBuffers[chunkIdx].Add(batch[i]);
+                        if (chunkBuffers[chunkIdx].Count == 10) {   // Flush when ten points queued
+                            chunkStreams[chunkIdx].Write(chunkBuffers[chunkIdx].ToArray());
+                            chunkBuffers[chunkIdx].Clear();
+                        }
+                    }
+                }
+            });
+
+            // Sort points
+            while (loadTask.Status == TaskStatus.Running || readQueue.Count > 0) {
+                while (sortedBatches.Count > maxSorted)
+                    Thread.Sleep(300);
+
+                Point[] batch;
+                while (!readQueue.TryDequeue(out batch))
+                    Thread.Sleep(300);
+
+                ComputeBuffer batchBuffer = new ComputeBuffer(batchSize, Point.size);
+                batchBuffer.SetData(batch);
+
+                ComputeBuffer sortedBuffer = new ComputeBuffer(batchSize, sizeof(uint));
+
+                unityActions.Enqueue(() => {
+                    int sortHandle = computeShader.FindKernel("SortPoints");
+                    computeShader.SetBuffer(sortHandle, "_Points", batchBuffer);
+                    computeShader.SetBuffer(sortHandle, "_ChunkIndices", sortedBuffer);
+                    computeShader.SetInt("_BatchSize", batch.Length);
+                    computeShader.Dispatch(sortHandle, 64, 1, 1);
+
+                    batchBuffer.Release();
+                });
+
+                uint[] chunkIndices = new uint[batch.Length];
+                sortedBuffer.GetData(chunkIndices);
+
+                sortedBatches.Enqueue((batch, chunkIndices));
+            }
+
+            allDistributed = true;
         }
     }
 
     struct BuildTreeParams {
-        string dirPath;
-        int treeDepth;
+        public Octree tree;
+        public PointCloudData data;
+        public BuildTreeParams(Octree tree, PointCloudData data) {
+            this.tree = tree;
+            this.data = data;
+        }
+    }
 
-
-        public BuildTreeParams(string dirPath, int treeDepth) {
-            this.dirPath = dirPath;
-            this.treeDepth = treeDepth;
+    struct Chunk {
+        public int level;
+        public int x;
+        public int y;
+        public int z;
+        public Chunk(int x, int y, int z, int level) {
+            this.x = x;
+            this.y = y;
+            this.z = z;
+            this.level = level;
         }
     }
 }
