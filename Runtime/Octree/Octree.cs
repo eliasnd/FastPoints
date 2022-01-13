@@ -16,6 +16,7 @@ namespace FastPoints {
         ComputeShader computeShader = (ComputeShader)Resources.Load("CountAndSort");
         int treeDepth;
         string dirPath;
+        AABB bbox;
 
         // Construction params
         int batchSize = 100000;  // Size of batches for reading and running shader
@@ -41,6 +42,11 @@ namespace FastPoints {
 
             float[] minPoint = new float[] { data.MinPoint.x-1E-5f, data.MinPoint.y-1E-5f, data.MinPoint.z-1E-5f };
             float[] maxPoint = new float[] { data.MaxPoint.x+1E-5f, data.MaxPoint.y+1E-5f, data.MaxPoint.z+1E-5f };
+
+            bbox = new AABB(
+                new Vector3(data.MinPoint.x-1E-5f, data.MinPoint.y-1E-5f, data.MinPoint.z-1E-5f), 
+                new Vector3(data.MaxPoint.x+1E-5f, data.MaxPoint.y+1E-5f, data.MaxPoint.z+1E-5f)
+            );
             
             // Initialize compute shader
             unityActions.Enqueue(() => {
@@ -51,6 +57,9 @@ namespace FastPoints {
                 computeShader.SetBuffer(computeShader.FindKernel("CountPoints"), "_Counts", chunkGridBuffer);
                 computeShader.SetInt("_ThreadCount", threadBudget);
             });
+
+            while (unityActions.Count > 0) // Wait for unity thread to complete action
+                    Thread.Sleep(300);
 
             // Counting loop
             while (loadTask.Status == TaskStatus.Running || readQueue.Count > 0) {
@@ -74,14 +83,18 @@ namespace FastPoints {
             readQueue.Clear();
             loadTask = data.LoadPointBatches(batchSize, readQueue, true);   // Start loading to get headstart while merging
 
+            while (unityActions.Count > 0) // Wait for unity thread to complete actions
+                Thread.Sleep(300);
+
             // Merge sparse chunks
 
             List<Chunk> chunks;
 
-            int sparseChunkCutoff = 1000000;    // Any chunk with more than sparseChunkCutoff points is written to disk
+            int sparseChunkCutoff = 10000000;    // Any chunk with more than sparseChunkCutoff points is written to disk
 
             uint[] levelGrid = new uint[chunkGridSize * chunkGridSize * chunkGridSize];
             chunkGridBuffer.GetData(grid);
+            unityActions.Enqueue(() => { chunkGridBuffer.Release(); });
 
             for (int level = chunkDepth; level > 0; level--) {
                 int levelGridSize = Mathf.Pow(levelGrid.Length, 1/3f);
@@ -125,15 +138,30 @@ namespace FastPoints {
                 levelGrid = nextLevelGrid;
             }
 
+            AABB[] chunkBBox = bbox.Subdivide(chunkGridSize);
+
             // Create lookup table
             int[] lut = new int[chunkGridSize * chunkGridSize * chunkGridSize];
             for (int i = 0; i < chunks.Count; i++) {
                 Chunk chunk = chunks[i];
 
-                if (chunk.level == chunkDepth)
+                if (chunk.level == chunkDepth) {
                     lut[chunk.x * chunkGridSize * chunkGridSize + chunk.y * chunkGridSize + chunk.z] = i;
+                    chunk.bbox = chunkBBox[i];
+                }
                 else {
                     int chunkSize = Mathf.Pow(2, chunkDepth-chunk.level);
+                    chunk.bbox = new AABB(
+                        chunks[
+                            chunk.x * chunkSize * chunkGridSize * chunkGridSize + 
+                            chunk.y * chunkSize * chunkGridSize + chunk.z * chunkSize
+                        ].bbox.Min, 
+                        chunks[
+                            ((chunk.x+1) * chunkSize - 1) * chunkGridSize * chunkGridSize + 
+                            ((chunk.y+1) * chunkSize - 1) * chunkGridSize
+                            ((chunk.z+1) * chunkSize - 1)
+                        ].bbox.Max
+                    );
                     for (int x = chunk.x * chunkSize; x < (chunk.x + 1) * chunkSize; x++)
                         for (int y = chunk.y * chunkSize; y < (chunk.y + 1) * chunkSize; y++)
                             for (int z = chunk.z * chunkSize; z < (chunk.z + 1) * chunkSize; z++)
@@ -149,7 +177,8 @@ namespace FastPoints {
 
             for (int i = 0; i < chunks.Count; i++) {
                 Chunk chunk = chunks[i];
-                chunkStreams[i] = File.Create($"{dirPath}/tmp/chunk_{chunk.x}_{chunk.y}_{chunk.z}_l{chunk.level}");
+                chunks[i].path = $"{dirPath}/tmp/chunk_{chunk.x}_{chunk.y}_{chunk.z}_l{chunk.level}";
+                chunkStreams[i] = File.Create(chunks[i].path);
                 chunkBuffers[i] = new List<Point>();
             }
 
@@ -183,14 +212,16 @@ namespace FastPoints {
 
                 Point[] batch;
                 while (!readQueue.TryDequeue(out batch))
-                    Thread.Sleep(300);
+                    Thread.Sleep(300);   
 
-                ComputeBuffer batchBuffer = new ComputeBuffer(batchSize, Point.size);
-                batchBuffer.SetData(batch);
-
-                ComputeBuffer sortedBuffer = new ComputeBuffer(batchSize, sizeof(uint));
+                uint[] chunkIndices = new uint[batch.Length];             
 
                 unityActions.Enqueue(() => {
+                    ComputeBuffer batchBuffer = new ComputeBuffer(batchSize, Point.size);
+                    batchBuffer.SetData(batch);
+
+                    ComputeBuffer sortedBuffer = new ComputeBuffer(batchSize, sizeof(uint));
+
                     int sortHandle = computeShader.FindKernel("SortPoints");
                     computeShader.SetBuffer(sortHandle, "_Points", batchBuffer);
                     computeShader.SetBuffer(sortHandle, "_ChunkIndices", sortedBuffer);
@@ -198,15 +229,105 @@ namespace FastPoints {
                     computeShader.Dispatch(sortHandle, 64, 1, 1);
 
                     batchBuffer.Release();
-                });
 
-                uint[] chunkIndices = new uint[batch.Length];
-                sortedBuffer.GetData(chunkIndices);
+                    sortedBuffer.GetData(chunkIndices);
+                    sortedBuffer.Release();
+                });
 
                 sortedBatches.Enqueue((batch, chunkIndices));
             }
 
             allDistributed = true;
+
+            // Subsample chunks
+
+            ThreadedWriter tw = new ThreadedWriter($"{dirPath}/octree.bin");
+            tw.Start();
+
+            for (int i = 0; i < chunks.Count; i++) {
+                Point[] chunk = Point.ToPoints(File.ReadAllBytes(chunks[i].path));
+                BuildOctree(chunk, chunks[i].bbox, 2);  // Go two layers at a time to get shallow tree
+            }
+
+            tw.Stop();
+        }
+
+        Node BuildLocalOctree(Point[] points, AABB bbox, int layers) {
+            int maxNodeSize = 2000000;
+            int totalNodeCount = (int)Mathf.Pow(8, layers);
+            bool actionComplete = false;
+
+            uint[] nodeGrid = new uint[(int)Mathf.Pow(8, layers)];
+            uint[] nodeIndices = new uint[points.Length];
+
+            unityActions.Enqueue(() => {
+                ComputeBuffer pointBuffer = new ComputeBuffer(batchSize, Point.size);
+                pointBuffer.SetData(points);
+
+                ComputeBuffer nodeGridBuffer = new ComputeBuffer(totalNodeCount, sizeof(UInt32));
+                int threadBudget = Mathf.CeilToInt(points.Length / 4096f);
+
+                ComputeShader sortedBuffer = new ComputeBuffer(points.Length, sizeof(UInt32));
+
+                int sortHandle = computeShader.FindKernel("SortPoints");
+                int countHandle = computeShader.FindKernel("CountPoints");
+
+                computeShader.SetFloats("_MinPoint", new float[] { bbox.Min.x, bbox.Min.y, bbox.Min.z });
+                computeShader.SetFloats("_MaxPoint", new float[] { bbox.Max.x, bbox.Max.y, bbox.Max.z });
+                computeShader.SetInt("_ChunkCount", totalNodeCount);
+                computeShader.SetInt("_ThreadCount", threadBudget);
+                computeShader.SetInt("_BatchSize", points.Length);
+
+                computeShader.SetBuffer(sortHandle, "_Points", pointBuffer);
+                computeShader.SetBuffer(sortHandle, "_ChunkIndices", sortedBuffer);
+
+                computeShader.Dispatch(sortHandle, 64, 1, 1);
+
+                pointBuffer.Release();
+
+                nodeGridBuffer.GetData(nodeGrid);
+                nodeGridBuffer.Release();
+
+                sortedBuffer.GetData(nodeIndices);
+                sortedBuffer.Release();
+
+                actionComplete = true;
+            });
+
+            // Create leaf nodes
+
+            List<Point>[] sorted = new List<Point>[totalNodeCount];
+            for (int i = 0; i < totalNodeCount; i++)
+                sorted[i] = new List<Point>();
+
+            while (!actionComplete)
+                Thread.Sleep(300);
+
+            for (int i = 0; i < points.Length; i++)
+                sorted[nodeIdx].Add(points[i]);
+
+            Node[] nodes = new Node[totalNodeCount];
+            AABB[] nodeBBox = bbox.Subdivide((int)Mathf.Pow(2, layers));
+
+            for (int i = 0; i < totalNodeCount; i++)
+                nodes[i] = 
+                    sorted[nodeIdx].Count > maxNodeSize ? 
+                    BuildLocalOctree(sorted[nodeIdx].ToArray(), nodeBBox[i], layers) : 
+                    new Node(sorted[nodeIdx].ToArray());
+
+            // Construct octree structure
+            Node[] prevLayer = nodes;
+            for (int l = layers-1; l > 0; l++) {
+                Node[] nextLayer = new Node[(int)Mathf.Pow(8, l)];
+                for (int n = 0; n < nextLayer.Length; n++) {
+                    Node node = new Node(null, true);
+                    for (int i = 0; i < 8; i++)
+                        node.children[i] = prevLayer[n * 8 + i];
+                    
+                }
+                prevLayer = nextLayer;
+            }
+
         }
     }
 
@@ -219,7 +340,22 @@ namespace FastPoints {
         }
     }
 
+    struct Node {
+        public Point[] points;
+        public Node[] children;
+
+        public Node() {}
+
+        public Node(Point[] points, bool hasChildren = false) {
+            this.points = points;
+            if (hasChildren)
+                children = new Node[8];
+        }
+    }
+
     struct Chunk {
+        public AABB bbox;
+        public string path;
         public int level;
         public int x;
         public int y;

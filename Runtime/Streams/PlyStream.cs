@@ -53,7 +53,6 @@ namespace FastPoints {
             currMaxPoint = new Vector3(float.MinValue, float.MinValue, float.MinValue);
 
             ReadHeader();
-            Debug.Log("Read header");
         }
 
         public override bool ReadPoints(int pointCount, Point[] target) {
