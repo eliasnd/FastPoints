@@ -18,5 +18,9 @@ namespace FastPoints {
         public override async Task  SamplePoints(int pointCount, Point[] target) {
             throw new NotImplementedException();
         }
+
+        public override async bool ReadPointsToQueue(ConcurrentQueue<Point> queue, int maxQueued, int batchSize) {
+            throw new NotImplementedException();
+        }
     }
 }

@@ -69,7 +69,7 @@ namespace FastPoints {
             BaseStream stream = handle.GetStream();
 
             Task t1 = Task.Run(() => {
-                for (int i = 0; i < count / batchSize; i++) {
+                /* for (int i = 0; i < count / batchSize; i++) {
                     Point[] batch = new Point[batchSize];
                     stream.ReadPoints(batchSize, batch);
                     batches.Enqueue(batch);                    
@@ -78,7 +78,8 @@ namespace FastPoints {
 
                 Point[] lastBatch = new Point[count % batchSize];
                 stream.ReadPoints(count % batchSize, lastBatch);
-                batches.Enqueue(lastBatch);
+                batches.Enqueue(lastBatch); */
+                stream.ReadPointsToQueue(batches, maxQueued, batchSize);
 
                 if (!populateBoundsAsync && handle.Type == PointCloudHandle.FileType.PLY) {
                     minPoint = stream.MinPoint;

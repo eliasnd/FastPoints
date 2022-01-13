@@ -28,6 +28,7 @@ namespace FastPoints {
         }
 
         public abstract bool ReadPoints(int pointCount, Point[] target);
+        public abstract async bool ReadPointsToQueue(ConcurrentQueue<Point> queue, int maxQueued, int batchSize);
         public abstract Task SamplePoints(int pointCount, Point[] target);
     }
 }

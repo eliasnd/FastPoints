@@ -41,6 +41,7 @@ namespace FastPoints {
         BinaryReader bReader;
         List<Property> properties = null;
         int pointSize;  // Number of bytes per point
+        int bodyOffset; // Number of bytes before body begins
 
         public PlyStream(string filePath) : base(filePath) {
             sReader = new StreamReader(stream);
@@ -128,75 +129,29 @@ namespace FastPoints {
         }
 
         public override async Task SamplePoints(int pointCount, Point[] target) {
-            if (format == Format.INVALID)
-                ReadHeader();
-
             int interval = count / pointCount;
-
+            
             if (interval < 1)
                 throw new ArgumentException("pointCount cannot exceed cloud size");
 
-            ConcurrentQueue<byte[]> readBinaryPoints = new ConcurrentQueue<byte[]>();
-            ConcurrentQueue<string> readASCIIPoints = new ConcurrentQueue<string>();
-            bool allPointsRead = false;
-            
-            bool result = false;
+            await Task.Run(() => {
+                if (format == Format.INVALID)
+                    ReadHeader();
 
-            // Task 1 enqueues bytes to be written to output
-            Task t1 = Task.Run(() => {
-                switch (format) {
-                    case Format.BINARY_LITTLE_ENDIAN:
-                    case Format.BINARY_BIG_ENDIAN:
-                        for (int i = 0; i < pointCount; i++) {
-                            readBinaryPoints.Enqueue(bReader.ReadBytes(pointSize));
-                            stream.Seek(pointSize * (interval - 1), SeekOrigin.Current);
-                        }
-                        allPointsRead = true;
-                        break;
-                    case Format.ASCII:
-                        for (int i = 0; i < pointCount; i++) {
-                            readASCIIPoints.Enqueue(sReader.ReadLine());
-                            for (int j = 0; j < interval-1; j++)
-                                sReader.ReadLine();
-                        }
-                        allPointsRead = true;
-                        break;
+                ConcurrentQueue<byte[]> bytes = new ConcurrentQueue<byte[]>();
+                ThreadedReader tr = new ThreadedReader(path, 1, bytes, bodyOffset, 15);
+                tr.StartSampling(pointCount);
+
+                int i = 0;
+
+                while (tr.IsRunning() || bytes.Count > 0) {
+                    byte[] pointBytes;
+                    while (!bytes.TryDequeue(out pointBytes))
+                        Thread.Sleep(300);
+                    target[i] = new Point(pointBytes);
+                    i++;
                 }
             });
-
-            // Task 2 dequeues bytes and writes to output
-            Task t2 = Task.Run(() => {
-                switch (format) {
-                    case Format.BINARY_LITTLE_ENDIAN:
-                        for (int i = 0; i < pointCount; i++) {
-                            byte[] bytes;
-                            while (!readBinaryPoints.TryDequeue(out bytes)) {} // Loop until successful dequeue
-                            target[i] = ReadPointBLE(bytes);
-                        }
-                        UnityEngine.Debug.Log("Done dequeueing points");
-                        result = true;
-                        break;
-                    case Format.BINARY_BIG_ENDIAN:
-                        for (int i = 0; i < pointCount; i++) {
-                            byte[] bytes;
-                            while (!readBinaryPoints.TryDequeue(out bytes)) {} // Loop until successful dequeue
-                            target[i] = ReadPointBBE(bytes);
-                        }
-                        result = true;
-                        break;
-                    case Format.ASCII:
-                        for (int i = 0; i < pointCount; i++) {
-                            string str;
-                            while (!readASCIIPoints.TryDequeue(out str)) {} // Loop until successful dequeue
-                            target[i] = ReadPointASCII(str);
-                        }
-                        result = true;
-                        break;
-                }
-            });
-
-            await t1;
-            await t2;
         }
 
         void ReadHeader() {
@@ -204,13 +159,13 @@ namespace FastPoints {
             properties = new List<Property>();
 
             string line = sReader.ReadLine();
-            bodyOffset += line.Length + 1;
+            bodyOffset += System.Text.ASCIIEncoding.ASCII.GetByteCount(line + "\n");
 
             if (line != "ply")
                 throw new System.Exception("Error: Missing header keyword 'ply'");
 
             line = sReader.ReadLine();
-            bodyOffset += line.Length + 1;
+            bodyOffset += System.Text.ASCIIEncoding.ASCII.GetByteCount(line + "\n");
 
             switch (line) {
                 case "format binary_little_endian 1.0":
@@ -228,7 +183,7 @@ namespace FastPoints {
 
             while (line != "end_header") {
                 line = sReader.ReadLine();
-                bodyOffset += line.Length + 1;
+                bodyOffset += System.Text.ASCIIEncoding.ASCII.GetByteCount(line + "\n");
 
                 string[] words = line.Split();
 
@@ -388,6 +343,26 @@ namespace FastPoints {
 
         public void SetComputeBounds(bool val) {
             computeBounds = val;
+        }
+
+        public override async bool ReadPointsToQueue(ConcurrentQueue<Point> queue, int maxQueued, int batchSize) {
+            await Task.Run(() => {
+                ConcurrentQueue<byte[]> bQueue = new ConcurrentQueue<byte[]>();
+
+                ThreadedReader tr = new ThreadedReader(path, batchSize * 15, bQueue, bodyOffset, 15);
+                tr.Start();
+
+                while (tr.IsRunning() || bQueue.Count > 0) {
+                    byte[] bytes;
+                    while (!bQueue.TryDequeue(out bytes))
+                        Thread.Sleep(300);
+
+                    if (queue.Count >= maxQueued)
+                        Thread.Sleep(75);
+
+                    queue.Enqueue(Point.ToPoints(bytes));
+                }
+            });  
         }
     }
 }
