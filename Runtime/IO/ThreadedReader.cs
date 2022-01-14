@@ -84,7 +84,7 @@ namespace FastPoints {
             if (round != 0)
                 threadSize -= threadSize % (uint)round;
 
-            Action closeCallback = () => { Interlocked.Add(ref activeThreads, -1); };
+            Action closeCallback = () => { Interlocked.Add(ref activeThreads, -1); Debug.Log($"Closed thread. {activeThreads} remaining"); };
 
             uint currOffset = (uint)offset;
 

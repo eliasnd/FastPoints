@@ -96,9 +96,9 @@ namespace FastPoints {
                     minPoint = new Vector3(float.MaxValue, float.MaxValue, float.MaxValue);
                     maxPoint = new Vector3(float.MinValue, float.MinValue, float.MinValue);
 
-                    int batchCount = 1;
+                    int pointsScanned = 0;
 
-                    for (int i = 0; i < count / batchSize + 1; i++) {
+                    while (pointsScanned < count) {
                         Point[] scanBatch;
                         while (!scanBatches.TryDequeue(out scanBatch)) {}
 
@@ -106,8 +106,8 @@ namespace FastPoints {
                             minPoint = Vector3.Min(minPoint, p.pos);
                             maxPoint = Vector3.Max(maxPoint, p.pos);
                         }
-                        if ((i+1) % 500 == 0)
-                            Debug.Log($"Scanning batch {i+1}/{(int)(count / batchSize)}");
+
+                        pointsScanned += scanBatch.Length;
                     }
 
 

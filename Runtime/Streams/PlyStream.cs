@@ -153,7 +153,13 @@ namespace FastPoints {
 
                 while (tr.IsRunning || bytes.Count > 0) {
                     byte[] pointBytes;
-                    while (!bytes.TryDequeue(out pointBytes)) {}
+                    while (!bytes.TryDequeue(out pointBytes)) 
+                        if (!tr.IsRunning)
+                            break;
+
+                    if (!tr.IsRunning)
+                        break;
+                        
                     target[i] = ReadPointBLE(pointBytes);
                     // Debug.Log($"Writing point {i}: {target[i].ToString()}");
                     i++;

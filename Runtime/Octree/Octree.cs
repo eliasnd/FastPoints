@@ -22,7 +22,7 @@ namespace FastPoints {
         AABB bbox;
 
         // Construction params
-        int batchSize = 100000;  // Size of batches for reading and running shader
+        int batchSize = 1000000;  // Size of batches for reading and running shader
         public Octree(int treeDepth, string dirPath, ConcurrentQueue<Action> unityActions) {
             this.treeDepth = treeDepth;
             this.unityActions = unityActions;
@@ -30,7 +30,9 @@ namespace FastPoints {
         }
 
         public async Task BuildTree(PointCloudData data) {
-            Debug.Log("Building tree");
+            Stopwatch watch = new Stopwatch();
+            watch.Start();
+            Debug.Log($"[{(int)(watch.ElapsedMilliseconds / 1000)}]: Starting");
 
             ConcurrentQueue<Point[]> readQueue = new ConcurrentQueue<Point[]>();
             Task loadTask;
@@ -39,23 +41,23 @@ namespace FastPoints {
             else
                 loadTask = data.LoadPointBatches(batchSize, readQueue, false);
 
-            Debug.Log("Started task");
+            // Debug.Log("Started task");
 
             int chunkDepth = 7;
             int chunkGridSize = (int)Mathf.Pow(2, chunkDepth);
-            Debug.Log("Allocating compute buffer");
-            ComputeBuffer chunkGridBuffer;
-            Debug.Log("Allocated compute buffer");
+            // Debug.Log("Allocating compute buffer");
+            ComputeBuffer chunkGridBuffer = null;    // Can't allocate from thread - have to trickery to get around type checker
+            // Debug.Log("Allocated compute buffer");
 
             // 4096 threads per shader pass call
             int threadBudget = Mathf.CeilToInt(batchSize / 4096f);
 
-            Debug.Log("Waiting on bounds");
+            // Debug.Log("Waiting on bounds");
 
             while (data.MinPoint.x >= data.MaxPoint.x || data.MinPoint.y >= data.MaxPoint.y || data.MinPoint.z >= data.MaxPoint.z)
                 Thread.Sleep(300);  // Block until bounds populated
 
-            Debug.Log("Bounds populated");
+            // Debug.Log("Bounds populated");
 
             float[] minPoint = new float[] { data.MinPoint.x-1E-5f, data.MinPoint.y-1E-5f, data.MinPoint.z-1E-5f };
             float[] maxPoint = new float[] { data.MaxPoint.x+1E-5f, data.MaxPoint.y+1E-5f, data.MaxPoint.z+1E-5f };
@@ -77,25 +79,28 @@ namespace FastPoints {
                 computeShader.SetInt("_ThreadCount", threadBudget);
             });
 
-            Debug.Log("Added action");
+            // Debug.Log("Added action");
 
             while (unityActions.Count > 0) // Wait for unity thread to complete action
-                    Thread.Sleep(300);
+                    Thread.Sleep(5);
 
-            Debug.Log($"Counting, size {System.Runtime.InteropServices.Marshal.SizeOf<Point>()}");
+            Debug.Log($"[{(int)(watch.ElapsedMilliseconds / 1000)}]: Starting counting");
+
+            // Debug.Log($"Counting, size {System.Runtime.InteropServices.Marshal.SizeOf<Point>()}");
             int pointsCounted = 0;
+            int pointsQueued = 0;
 
             // Counting loop
-            while (loadTask.Status == TaskStatus.Running || readQueue.Count > 0) {
+            while (pointsQueued < data.PointCount) {
                 Point[] batch;
                 while (!readQueue.TryDequeue(out batch))
-                    Thread.Sleep(300);
+                    Thread.Sleep(5);
 
                 // Debug.Log("Dequeued batch");
 
                 unityActions.Enqueue(() => {
-                    Stopwatch watch = new Stopwatch();
-                    watch.Start();
+                    // Stopwatch watch = new Stopwatch();
+                    // watch.Start();
                     ComputeBuffer batchBuffer = new ComputeBuffer(batch.Length, Point.size);
                     batchBuffer.SetData(batch);
 
@@ -106,48 +111,54 @@ namespace FastPoints {
 
                     batchBuffer.Release();
                     pointsCounted += batch.Length;
-                    watch.Stop();
-                    Debug.Log($"Batch processed in {watch.ElapsedMilliseconds} ms");
-                    Debug.Log($"Points counted: {pointsCounted}");
+                    // watch.Stop();
+                    // Debug.Log($"Batch processed in {watch.ElapsedMilliseconds} ms");
+                    // Debug.Log($"Points counted: {pointsCounted}");
                 });
+
+                pointsQueued += batch.Length;
             }
 
-            Debug.Log("Out of loop");
+            Debug.Log($"[{(int)(watch.ElapsedMilliseconds / 1000)}]: Queued Counting");
 
             readQueue.Clear();
             loadTask = data.LoadPointBatches(batchSize, readQueue, false);   // Start loading to get headstart while merging
 
             while (unityActions.Count > 0) // Wait for unity thread to complete actions
-                Thread.Sleep(300);
+                Thread.Sleep(10);
 
-            Debug.Log("Merging");
+            Debug.Log($"[{(int)(watch.ElapsedMilliseconds / 1000)}]: Done Counting");
+
+            watch.Stop();
 
             // Merge sparse chunks
 
-            /* List<Chunk> chunks;
+            List<Chunk> chunks = new List<Chunk>();
 
             int sparseChunkCutoff = 10000000;    // Any chunk with more than sparseChunkCutoff points is written to disk
 
             uint[] levelGrid = new uint[chunkGridSize * chunkGridSize * chunkGridSize];
-            chunkGridBuffer.GetData(grid);
-            unityActions.Enqueue(() => { chunkGridBuffer.Release(); });
+            unityActions.Enqueue(() => { chunkGridBuffer.GetData(levelGrid); chunkGridBuffer.Release(); });
+
+            while (unityActions.Count > 0)
+                Thread.Sleep(5);
 
             for (int level = chunkDepth; level > 0; level--) {
-                int levelGridSize = Mathf.Pow(levelGrid.Length, 1/3f);
+                int levelGridSize = (int)Mathf.Pow(levelGrid.Length, 1/3f);
 
-                var levelGridIndex = (int x, int y, int z) => levelGrid[x * levelGridSize * levelGridSize + y * levelGridSize + z];
+                Func<int, int, int, uint> levelGridIndex = (int x, int y, int z) => levelGrid[x * levelGridSize * levelGridSize + y * levelGridSize + z];
 
                 uint[] nextLevelGrid = new uint[(levelGridSize-1) * (levelGridSize-1) * (levelGridSize-1)];
 
                 for (int x = 0; x < levelGridSize; x+=2)
                     for (int y = 0; y < levelGridSize; y+=2)
                         for (int z = 0; z < levelGridSize; z+=2) {
-                            var addChunks = () => {
+                            Action addChunks = () => {
                                 chunks.Add(new Chunk(x, y, z, level)); chunks.Add(new Chunk(x, y, z+1, level));
                                 chunks.Add(new Chunk(x, y+1, z, level)); chunks.Add(new Chunk(x, y+1, z+1, level));
                                 chunks.Add(new Chunk(x+1, y, z, level)); chunks.Add(new Chunk(x+1, y, z+1, level));
                                 chunks.Add(new Chunk(x+1, y+1, z, level)); chunks.Add(new Chunk(x+1, y+1, z+1, level));
-                                nextLevelGrid[gridIndex(x/2, y/2, z/2)] = UInt32.MaxValue;
+                                nextLevelGrid[x/2 * (levelGridSize-1) * (levelGridSize-1) + y/2 * (levelGridSize-1) + z/2] = UInt32.MaxValue;
                             };
 
                             // If any chunks in cube previously added
@@ -166,7 +177,7 @@ namespace FastPoints {
 
                             // If cube below threshold
                             if (cubeSum < sparseChunkCutoff)
-                                nextLevelGrid[gridIndex(x/2, y/2, z/2)] = cubeSum;
+                                nextLevelGrid[x/2 * (levelGridSize-1) * (levelGridSize-1) + y/2 * (levelGridSize-1) + z/2] = cubeSum;
                             else
                                 addChunks();
                         }
@@ -186,7 +197,7 @@ namespace FastPoints {
                     chunk.bbox = chunkBBox[i];
                 }
                 else {
-                    int chunkSize = Mathf.Pow(2, chunkDepth-chunk.level);
+                    int chunkSize = (int)Mathf.Pow(2, chunkDepth-chunk.level);
                     chunk.bbox = new AABB(
                         chunks[
                             chunk.x * chunkSize * chunkGridSize * chunkGridSize + 
@@ -194,7 +205,7 @@ namespace FastPoints {
                         ].bbox.Min, 
                         chunks[
                             ((chunk.x+1) * chunkSize - 1) * chunkGridSize * chunkGridSize + 
-                            ((chunk.y+1) * chunkSize - 1) * chunkGridSize
+                            ((chunk.y+1) * chunkSize - 1) * chunkGridSize +
                             ((chunk.z+1) * chunkSize - 1)
                         ].bbox.Max
                     );
@@ -206,7 +217,7 @@ namespace FastPoints {
             }
 
             // Create chunk files
-            Directory.CreateDirectory($"{dirPath}/tmp");
+            /* Directory.CreateDirectory($"{dirPath}/tmp");
 
             FileStream[] chunkStreams = new FileStream[];
             List<Point>[] chunkBuffers = new List<Point>[chunks.Count];
