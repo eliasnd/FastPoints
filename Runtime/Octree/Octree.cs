@@ -1,11 +1,14 @@
 using UnityEngine;
 
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Collections.Generic;
 using System.Collections.Concurrent;
+
+using Debug = UnityEngine.Debug;
 
 namespace FastPoints {
     // Class for octree operations
@@ -27,18 +30,32 @@ namespace FastPoints {
         }
 
         public async Task BuildTree(PointCloudData data) {
-            /* ConcurrentQueue<Point[]> readQueue = new ConcurrentQueue<Point[]>();
-            Task loadTask = data.LoadPointBatches(batchSize, readQueue, true);
+            Debug.Log("Building tree");
+
+            ConcurrentQueue<Point[]> readQueue = new ConcurrentQueue<Point[]>();
+            Task loadTask;
+            if (data.MinPoint.x >= data.MaxPoint.x || data.MinPoint.y >= data.MaxPoint.y || data.MinPoint.z >= data.MaxPoint.z) 
+                loadTask = data.LoadPointBatches(batchSize, readQueue, true);
+            else
+                loadTask = data.LoadPointBatches(batchSize, readQueue, false);
+
+            Debug.Log("Started task");
 
             int chunkDepth = 7;
             int chunkGridSize = (int)Mathf.Pow(2, chunkDepth);
-            ComputeBuffer chunkGridBuffer = new ComputeBuffer(chunkGridSize * chunkGridSize * chunkGridSize, sizeof(UInt32));
+            Debug.Log("Allocating compute buffer");
+            ComputeBuffer chunkGridBuffer;
+            Debug.Log("Allocated compute buffer");
 
             // 4096 threads per shader pass call
             int threadBudget = Mathf.CeilToInt(batchSize / 4096f);
 
+            Debug.Log("Waiting on bounds");
+
             while (data.MinPoint.x >= data.MaxPoint.x || data.MinPoint.y >= data.MaxPoint.y || data.MinPoint.z >= data.MaxPoint.z)
                 Thread.Sleep(300);  // Block until bounds populated
+
+            Debug.Log("Bounds populated");
 
             float[] minPoint = new float[] { data.MinPoint.x-1E-5f, data.MinPoint.y-1E-5f, data.MinPoint.z-1E-5f };
             float[] maxPoint = new float[] { data.MaxPoint.x+1E-5f, data.MaxPoint.y+1E-5f, data.MaxPoint.z+1E-5f };
@@ -50,6 +67,8 @@ namespace FastPoints {
             
             // Initialize compute shader
             unityActions.Enqueue(() => {
+                chunkGridBuffer = new ComputeBuffer(chunkGridSize * chunkGridSize * chunkGridSize, sizeof(UInt32));
+
                 computeShader.SetFloats("_MinPoint", minPoint);
                 computeShader.SetFloats("_MaxPoint", maxPoint);
 
@@ -58,8 +77,13 @@ namespace FastPoints {
                 computeShader.SetInt("_ThreadCount", threadBudget);
             });
 
+            Debug.Log("Added action");
+
             while (unityActions.Count > 0) // Wait for unity thread to complete action
                     Thread.Sleep(300);
+
+            Debug.Log($"Counting, size {System.Runtime.InteropServices.Marshal.SizeOf<Point>()}");
+            int pointsCounted = 0;
 
             // Counting loop
             while (loadTask.Status == TaskStatus.Running || readQueue.Count > 0) {
@@ -67,28 +91,40 @@ namespace FastPoints {
                 while (!readQueue.TryDequeue(out batch))
                     Thread.Sleep(300);
 
-                ComputeBuffer batchBuffer = new ComputeBuffer(batchSize, Point.size);
-                batchBuffer.SetData(batch);
+                // Debug.Log("Dequeued batch");
 
                 unityActions.Enqueue(() => {
+                    Stopwatch watch = new Stopwatch();
+                    watch.Start();
+                    ComputeBuffer batchBuffer = new ComputeBuffer(batch.Length, Point.size);
+                    batchBuffer.SetData(batch);
+
                     int countHandle = computeShader.FindKernel("CountPoints");
                     computeShader.SetBuffer(countHandle, "_Points", batchBuffer);
                     computeShader.SetInt("_BatchSize", batch.Length);
                     computeShader.Dispatch(countHandle, 64, 1, 1);
 
                     batchBuffer.Release();
+                    pointsCounted += batch.Length;
+                    watch.Stop();
+                    Debug.Log($"Batch processed in {watch.ElapsedMilliseconds} ms");
+                    Debug.Log($"Points counted: {pointsCounted}");
                 });
             }
 
+            Debug.Log("Out of loop");
+
             readQueue.Clear();
-            loadTask = data.LoadPointBatches(batchSize, readQueue, true);   // Start loading to get headstart while merging
+            loadTask = data.LoadPointBatches(batchSize, readQueue, false);   // Start loading to get headstart while merging
 
             while (unityActions.Count > 0) // Wait for unity thread to complete actions
                 Thread.Sleep(300);
 
+            Debug.Log("Merging");
+
             // Merge sparse chunks
 
-            List<Chunk> chunks;
+            /* List<Chunk> chunks;
 
             int sparseChunkCutoff = 10000000;    // Any chunk with more than sparseChunkCutoff points is written to disk
 
@@ -261,7 +297,7 @@ namespace FastPoints {
             uint[] nodeIndices = new uint[points.Length];
 
             unityActions.Enqueue(() => {
-                ComputeBuffer pointBuffer = new ComputeBuffer(batchSize, Point.size);
+                ComputeBuffer pointBuffer = new ComputeBuffer(batchSize, 15);
                 pointBuffer.SetData(points);
 
                 ComputeBuffer nodeGridBuffer = new ComputeBuffer(totalNodeCount, sizeof(UInt32));

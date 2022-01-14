@@ -15,6 +15,8 @@ namespace FastPoints {
         ConcurrentQueue<byte[]> queue;
         int maxLength = 150;
         int batchSize;
+        int offset;
+        int round;
         bool reading;
         bool sampling;
         public bool IsRunning { get { return activeThreads > 0; } }
@@ -25,14 +27,56 @@ namespace FastPoints {
         int activeThreads;
 
         public ThreadedReader(string path, int batchSize, ConcurrentQueue<byte[]> queue, int offset=0, int round=0) {
-            Debug.Log($"Threaded reader constructor, offset {offset}");
             this.path = path;
             this.batchSize = batchSize;
+            this.queue = queue;
+            this.offset = offset;
+            this.round = round;
+        }
 
-            ConcurrentQueue<byte[]> readQueue = queue;
-            ConcurrentQueue<byte[]> sampleQueue = queue;
+        public bool StartReading() {
+            if (reading || sampling)
+                return false;
+
+            reading = true;
 
             readThreads = new (ReadThreadParams, Thread)[threadCount];
+
+            uint fileLength = (uint)(new FileInfo(path).Length);
+            uint threadSize = fileLength / (uint)threadCount;
+            if (round != 0)
+                threadSize -= threadSize % (uint)round;
+
+            Action closeCallback = () => { Interlocked.Add(ref activeThreads, -1); };
+
+            uint currOffset = (uint)offset;
+
+            for (int i = 0; i < threadCount-1; i++) {
+                ReadThreadParams p = new ReadThreadParams(path, currOffset, threadSize, batchSize, queue, closeCallback);
+                Thread t = new Thread(new ParameterizedThreadStart(ThreadedReader.ReadThread));
+                t.Start(p);
+                Interlocked.Add(ref activeThreads, 1);
+
+                readThreads[i] = (p, t);
+                currOffset += threadSize;
+            }
+
+            ReadThreadParams lastP = new ReadThreadParams(path, currOffset, fileLength - currOffset, batchSize, queue, closeCallback);
+            Thread lastT = new Thread(new ParameterizedThreadStart(ThreadedReader.ReadThread));
+            lastT.Start(lastP);
+            Interlocked.Add(ref activeThreads, 1);
+
+            readThreads[threadCount-1] = (lastP, lastT);            
+
+            return true;
+        }
+
+        public bool StartSampling(int sampleCount) {
+            if (sampling || reading)
+                return false;
+
+            sampling = true;
+
             sampleThreads = new (SampleThreadParams, Thread)[threadCount];
 
             uint fileLength = (uint)(new FileInfo(path).Length);
@@ -40,63 +84,26 @@ namespace FastPoints {
             if (round != 0)
                 threadSize -= threadSize % (uint)round;
 
-            Debug.Log($"fileLength {fileLength}, threadSize {threadSize}, offset {offset}");
-
             Action closeCallback = () => { Interlocked.Add(ref activeThreads, -1); };
 
             uint currOffset = (uint)offset;
 
             for (int i = 0; i < threadCount-1; i++) {
-                readThreads[i] = (
-                    new ReadThreadParams(path, currOffset, threadSize, batchSize, readQueue, closeCallback), 
-                    new Thread(new ParameterizedThreadStart(ThreadedReader.ReadThread))
-                );
-                sampleThreads[i] = (
-                    new SampleThreadParams(path, currOffset, currOffset + threadSize, 0, round, sampleQueue, closeCallback), 
-                    new Thread(new ParameterizedThreadStart(ThreadedReader.SampleThread))
-                );
+                SampleThreadParams p = new SampleThreadParams(path, currOffset, currOffset + threadSize, (uint)(sampleCount / threadCount), round, queue, closeCallback);
+                Thread t = new Thread(new ParameterizedThreadStart(ThreadedReader.SampleThread));
+                t.Start(p);
+                Interlocked.Add(ref activeThreads, 1);
 
+                sampleThreads[i] = (p, t);
                 currOffset += threadSize;
             }
 
-            readThreads[threadCount-1] = (
-                new ReadThreadParams(path, currOffset, fileLength - currOffset, batchSize, readQueue, closeCallback), 
-                new Thread(new ParameterizedThreadStart(ThreadedReader.ReadThread))
-            );
-            sampleThreads[threadCount-1] = (
-                new SampleThreadParams(path, currOffset, fileLength, 0, round, sampleQueue, closeCallback), 
-                new Thread(new ParameterizedThreadStart(ThreadedReader.SampleThread)));
-        }
+            SampleThreadParams lastP = new SampleThreadParams(path, currOffset, fileLength, (uint)(sampleCount / threadCount + sampleCount % threadCount), round, queue, closeCallback);
+            Thread lastT = new Thread(new ParameterizedThreadStart(ThreadedReader.SampleThread));
+            lastT.Start(lastP);
+            Interlocked.Add(ref activeThreads, 1);
+            sampleThreads[threadCount-1] = (lastP, lastT);
 
-        public bool StartReading() {
-            if (reading)
-                return false;
-
-            foreach ((ReadThreadParams p, Thread t) tup in readThreads) {
-                tup.t.Start(tup.p);
-                Interlocked.Add(ref activeThreads, 1);
-            }
-
-            reading = true;
-            return true;
-        }
-
-        public bool StartSampling(int sampleCount) {
-            if (sampling)
-                return false;
-
-            for (int i = 0; i < threadCount-1; i++) {
-                (SampleThreadParams p, Thread t) tup = sampleThreads[i];
-                tup.p.count = (uint)(sampleCount / threadCount);
-                tup.t.Start(tup.p);
-                Interlocked.Add(ref activeThreads, 1);
-            }
-
-            (SampleThreadParams p, Thread t) lastTup = sampleThreads[threadCount-1];
-            lastTup.p.count = (uint)(sampleCount / threadCount + sampleCount % threadCount);
-            lastTup.t.Start(lastTup.p);
-
-            sampling = true;
             return true;
         }
 

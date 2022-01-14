@@ -44,7 +44,7 @@ namespace FastPoints {
         public void Update() {
 
             void ResetTree() {
-                treeThread.Abort(); // Eventually clean up files here
+                // treeThread.Abort(); // Eventually clean up files here
                 tree = null;
                 treeThread = null;
                 actions = new ConcurrentQueue<Action>();
@@ -106,8 +106,8 @@ namespace FastPoints {
             if (data.TreeGenerated) {
                 throw new NotImplementedException();
             } else if (data.DecimatedGenerated) {
-
-                ComputeBuffer cb = new ComputeBuffer(data.decimatedCloud.Length, System.Runtime.InteropServices.Marshal.SizeOf<Point>());
+                // Debug.Log($"Point size: {System.Runtime.InteropServices.Marshal.SizeOf<Vector3>()} + {System.Runtime.InteropServices.Marshal.SizeOf<Color>()}");
+                ComputeBuffer cb = new ComputeBuffer(data.decimatedCloud.Length, Point.size);
                 cb.SetData(data.decimatedCloud);
 
                 Material mat = new Material(Shader.Find("Custom/DefaultPoint"));
