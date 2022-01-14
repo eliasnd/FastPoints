@@ -4,6 +4,7 @@ using Unity.Collections;
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using System.Collections.Concurrent;
 using System.IO;
 
 namespace FastPoints {
@@ -28,7 +29,7 @@ namespace FastPoints {
         }
 
         public abstract bool ReadPoints(int pointCount, Point[] target);
-        public abstract async bool ReadPointsToQueue(ConcurrentQueue<Point> queue, int maxQueued, int batchSize);
+        public abstract Task ReadPointsToQueue(ConcurrentQueue<Point[]> queue, int maxQueued, int batchSize);
         public abstract Task SamplePoints(int pointCount, Point[] target);
     }
 }

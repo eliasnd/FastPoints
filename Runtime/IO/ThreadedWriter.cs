@@ -84,7 +84,7 @@ namespace FastPoints {
         }
     }
 
-    public class ThreadParams {
+    class ThreadParams {
 
         public string filePath;
         public ConcurrentQueue<(uint, byte[])> writeQueue;

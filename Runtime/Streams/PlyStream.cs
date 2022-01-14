@@ -57,9 +57,6 @@ namespace FastPoints {
         }
 
         public override bool ReadPoints(int pointCount, Point[] target) {
-            if (format == Format.INVALID)
-                ReadHeader();
-
             bool result = index + pointCount <= count;
 
             if (!result)
@@ -129,43 +126,132 @@ namespace FastPoints {
         }
 
         public override async Task SamplePoints(int pointCount, Point[] target) {
-            int interval = count / pointCount;
-            
-            if (interval < 1)
-                throw new ArgumentException("pointCount cannot exceed cloud size");
-
             await Task.Run(() => {
-                if (format == Format.INVALID)
-                    ReadHeader();
+                Debug.Log($"Calling sample points. Format {format}, body offset {bodyOffset}");
+                if (format != Format.BINARY_LITTLE_ENDIAN)
+                    throw new NotImplementedException();
+
+                int interval = count / pointCount;
+
+                if (interval < 1)
+                    throw new ArgumentException("pointCount cannot exceed cloud size");
+
+                FileStream fs = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+                fs.Seek(bodyOffset, SeekOrigin.Begin);
+                byte[] firstPointBytes = new byte[pointSize];
+                fs.Read(firstPointBytes);
+
+                // Debug.Log($"Creating threaded reader with offset {bodyOffset}");
 
                 ConcurrentQueue<byte[]> bytes = new ConcurrentQueue<byte[]>();
-                ThreadedReader tr = new ThreadedReader(path, 1, bytes, bodyOffset, 15);
+                ThreadedReader tr = new ThreadedReader(path, 1, bytes, bodyOffset, pointSize);
                 tr.StartSampling(pointCount);
+
+                // Debug.Log("Threaded reader sampling started");
 
                 int i = 0;
 
-                while (tr.IsRunning() || bytes.Count > 0) {
+                while (tr.IsRunning || bytes.Count > 0) {
                     byte[] pointBytes;
-                    while (!bytes.TryDequeue(out pointBytes))
-                        Thread.Sleep(300);
-                    target[i] = new Point(pointBytes);
+                    while (!bytes.TryDequeue(out pointBytes)) {}
+                    target[i] = ReadPointBLE(pointBytes);
+                    // Debug.Log($"Writing point {i}: {target[i].ToString()}");
                     i++;
                 }
+
+                Debug.Log($"First point: {target[0].ToString()}");
             });
+
+            Debug.Log("Done sampling");
         }
 
+        /* public override async Task SamplePoints(int pointCount, Point[] target) {
+            if (format == Format.INVALID)
+                ReadHeader();
+
+            int interval = count / pointCount;
+            int lineLength;
+
+            if (interval < 1)
+                throw new ArgumentException("pointCount cannot exceed cloud size");
+
+            Debug.Log($"Interval is {interval}");
+
+            ConcurrentQueue<byte[]> readBinaryPoints = new ConcurrentQueue<byte[]>();
+            ConcurrentQueue<string> readASCIIPoints = new ConcurrentQueue<string>();
+            lineLength = CalculatePointBytes(); 
+            bool allPointsRead = false;
+            
+            bool result = false;
+
+            Task t1 = Task.Run(() => {
+                switch (format) {
+                    case Format.BINARY_LITTLE_ENDIAN:
+                    case Format.BINARY_BIG_ENDIAN:
+                        for (int i = 0; i < pointCount; i++) {
+                            readBinaryPoints.Enqueue(bReader.ReadBytes(lineLength));
+                            stream.Seek(lineLength * (interval - 1), SeekOrigin.Current);
+                        }
+                        allPointsRead = true;
+                        UnityEngine.Debug.Log("Done queueing points");
+                        break;
+                    case Format.ASCII:
+                        for (int i = 0; i < pointCount; i++) {
+                            readASCIIPoints.Enqueue(sReader.ReadLine());
+                            for (int j = 0; j < interval-1; j++)
+                                sReader.ReadLine();
+                        }
+                        allPointsRead = true;
+                        break;
+                }
+            });
+
+            Task t2 = Task.Run(() => {
+                switch (format) {
+                    case Format.BINARY_LITTLE_ENDIAN:
+                        for (int i = 0; i < pointCount; i++) {
+                            byte[] bytes;
+                            while (!readBinaryPoints.TryDequeue(out bytes)) {} // Loop until successful dequeue
+                            target[i] = ReadPointBLE(bytes);
+                        }
+                        UnityEngine.Debug.Log("Done dequeueing points");
+                        result = true;
+                        break;
+                    case Format.BINARY_BIG_ENDIAN:
+                        for (int i = 0; i < pointCount; i++) {
+                            byte[] bytes;
+                            while (!readBinaryPoints.TryDequeue(out bytes)) {} // Loop until successful dequeue
+                            target[i] = ReadPointBBE(bytes);
+                        }
+                        result = true;
+                        break;
+                    case Format.ASCII:
+                        for (int i = 0; i < pointCount; i++) {
+                            string str;
+                            while (!readASCIIPoints.TryDequeue(out str)) {} // Loop until successful dequeue
+                            target[i] = ReadPointASCII(str);
+                        }
+                        result = true;
+                        break;
+                }
+            });
+
+            await t1;
+            await t2;
+        } */
+
         void ReadHeader() {
-            int bodyOffset = 0;
+            bodyOffset = 0;
             properties = new List<Property>();
 
             string line = sReader.ReadLine();
-            bodyOffset += System.Text.ASCIIEncoding.ASCII.GetByteCount(line + "\n");
+            bodyOffset += line.Length + 1;
 
             if (line != "ply")
                 throw new System.Exception("Error: Missing header keyword 'ply'");
 
             line = sReader.ReadLine();
-            bodyOffset += System.Text.ASCIIEncoding.ASCII.GetByteCount(line + "\n");
+            bodyOffset += line.Length + 1;
 
             switch (line) {
                 case "format binary_little_endian 1.0":
@@ -183,7 +269,7 @@ namespace FastPoints {
 
             while (line != "end_header") {
                 line = sReader.ReadLine();
-                bodyOffset += System.Text.ASCIIEncoding.ASCII.GetByteCount(line + "\n");
+                bodyOffset += line.Length + 1;
 
                 string[] words = line.Split();
 
@@ -345,20 +431,19 @@ namespace FastPoints {
             computeBounds = val;
         }
 
-        public override async bool ReadPointsToQueue(ConcurrentQueue<Point> queue, int maxQueued, int batchSize) {
+        public override async Task ReadPointsToQueue(ConcurrentQueue<Point[]> queue, int maxQueued, int batchSize) {
             await Task.Run(() => {
                 ConcurrentQueue<byte[]> bQueue = new ConcurrentQueue<byte[]>();
 
-                ThreadedReader tr = new ThreadedReader(path, batchSize * 15, bQueue, bodyOffset, 15);
-                tr.Start();
+                ThreadedReader tr = new ThreadedReader(path, batchSize * pointSize, bQueue, bodyOffset, pointSize);
+                tr.StartReading();
 
-                while (tr.IsRunning() || bQueue.Count > 0) {
+                while (tr.IsRunning || bQueue.Count > 0) {
                     byte[] bytes;
                     while (!bQueue.TryDequeue(out bytes))
-                        Thread.Sleep(300);
+                        Thread.Sleep(5);
 
-                    if (queue.Count >= maxQueued)
-                        Thread.Sleep(75);
+                    if (queue.Count >= maxQueued) {}
 
                     queue.Enqueue(Point.ToPoints(bytes));
                 }

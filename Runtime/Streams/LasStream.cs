@@ -3,6 +3,7 @@ using Unity.Collections;
 
 using System;
 using System.Collections.Generic;
+using System.Collections.Concurrent;
 using System.Threading.Tasks;
 using System.IO;
 
@@ -19,7 +20,7 @@ namespace FastPoints {
             throw new NotImplementedException();
         }
 
-        public override async bool ReadPointsToQueue(ConcurrentQueue<Point> queue, int maxQueued, int batchSize) {
+        public override async Task ReadPointsToQueue(ConcurrentQueue<Point[]> queue, int maxQueued, int batchSize) {
             throw new NotImplementedException();
         }
     }

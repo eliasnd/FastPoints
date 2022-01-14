@@ -32,8 +32,13 @@ namespace FastPoints {
 
         public void Start() {
             actions = new ConcurrentQueue<Action>();
-            Debug.Log(actions);
             computeShader = (ComputeShader)Resources.Load("CountAndSort");
+        }
+
+        public void Reset() {
+            actions = new ConcurrentQueue<Action>();
+            computeShader = (ComputeShader)Resources.Load("CountAndSort");
+            oldData = null;
         }
 
         public void Update() {
@@ -42,6 +47,7 @@ namespace FastPoints {
                 treeThread.Abort(); // Eventually clean up files here
                 tree = null;
                 treeThread = null;
+                actions = new ConcurrentQueue<Action>();
             }
 
             if (data == null) {     // If no data
@@ -76,8 +82,8 @@ namespace FastPoints {
                 action();
             }
 
-            if (!treeThread.IsAlive)
-                data.TreePath = "Resources/Octree";
+            // if (!treeThread.IsAlive)
+                // data.TreePath = "Resources/Octree";
 
             oldData = data;
         }

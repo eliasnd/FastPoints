@@ -54,7 +54,6 @@ namespace FastPoints {
             Stopwatch watch = new Stopwatch();
             watch.Start();
             decimatedCloud = new Point[size];
-            Debug.Log(decimatedCloud.Length);
             
             await handle.GetStream().SamplePoints(decimatedCloud.Length, decimatedCloud);
             

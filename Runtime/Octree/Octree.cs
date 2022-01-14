@@ -27,7 +27,7 @@ namespace FastPoints {
         }
 
         public async Task BuildTree(PointCloudData data) {
-            ConcurrentQueue<Point[]> readQueue = new ConcurrentQueue<Point[]>();
+            /* ConcurrentQueue<Point[]> readQueue = new ConcurrentQueue<Point[]>();
             Task loadTask = data.LoadPointBatches(batchSize, readQueue, true);
 
             int chunkDepth = 7;
@@ -326,7 +326,7 @@ namespace FastPoints {
                     
                 }
                 prevLayer = nextLayer;
-            }
+            }*/
 
         }
     }
@@ -344,12 +344,12 @@ namespace FastPoints {
         public Point[] points;
         public Node[] children;
 
-        public Node() {}
-
         public Node(Point[] points, bool hasChildren = false) {
             this.points = points;
             if (hasChildren)
                 children = new Node[8];
+            else
+                children = null;
         }
     }
 
@@ -365,6 +365,8 @@ namespace FastPoints {
             this.y = y;
             this.z = z;
             this.level = level;
+            this.bbox = new AABB(new Vector3(1,1,1), new Vector3(0,0,0));
+            this.path = null;
         }
     }
 }
