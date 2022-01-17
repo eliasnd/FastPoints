@@ -23,6 +23,9 @@ namespace FastPoints {
 
         // Construction params
         int batchSize = 1000000;  // Size of batches for reading and running shader
+
+        bool doTests = true;
+
         public Octree(int treeDepth, string dirPath, ConcurrentQueue<Action> unityActions) {
             this.treeDepth = treeDepth;
             this.unityActions = unityActions;
@@ -68,27 +71,31 @@ namespace FastPoints {
             );
             
             // Initialize compute shader
-            unityActions.Enqueue(() => {
+            await ExecuteAction(() => {
+                computeShader = (ComputeShader)Resources.Load("CountAndSort");
+
                 chunkGridBuffer = new ComputeBuffer(chunkGridSize * chunkGridSize * chunkGridSize, sizeof(UInt32));
 
                 computeShader.SetFloats("_MinPoint", minPoint);
                 computeShader.SetFloats("_MaxPoint", maxPoint);
 
-                computeShader.SetInt("_ChunkCount", chunkGridSize * chunkGridSize * chunkGridSize);
+                computeShader.SetInt("_NodeCount", chunkGridSize * chunkGridSize * chunkGridSize);
                 computeShader.SetBuffer(computeShader.FindKernel("CountPoints"), "_Counts", chunkGridBuffer);
-                computeShader.SetInt("_ThreadCount", threadBudget);
+                computeShader.SetInt("_ThreadBudget", threadBudget);
             });
 
             // Debug.Log("Added action");
 
-            while (unityActions.Count > 0) // Wait for unity thread to complete action
-                    Thread.Sleep(5);
+            /* while (unityActions.Count > 0) // Wait for unity thread to complete action
+                    Thread.Sleep(5); */
 
             Debug.Log($"[{(int)(watch.ElapsedMilliseconds / 1000)}]: Starting counting");
 
             // Debug.Log($"Counting, size {System.Runtime.InteropServices.Marshal.SizeOf<Point>()}");
             int pointsCounted = 0;
             int pointsQueued = 0;
+
+            List<Task> countTasks = new List<Task>();
 
             // Counting loop
             while (pointsQueued < data.PointCount) {
@@ -98,23 +105,35 @@ namespace FastPoints {
 
                 // Debug.Log("Dequeued batch");
 
-                unityActions.Enqueue(() => {
+                countTasks.Add(ExecuteAction(() => {
                     // Stopwatch watch = new Stopwatch();
                     // watch.Start();
                     ComputeBuffer batchBuffer = new ComputeBuffer(batch.Length, Point.size);
                     batchBuffer.SetData(batch);
+
+                    // Debug.Log(batch[0].ToString());
+
+                    computeShader.SetBuffer(computeShader.FindKernel("CountPoints"), "_Counts", chunkGridBuffer);
 
                     int countHandle = computeShader.FindKernel("CountPoints");
                     computeShader.SetBuffer(countHandle, "_Points", batchBuffer);
                     computeShader.SetInt("_BatchSize", batch.Length);
                     computeShader.Dispatch(countHandle, 64, 1, 1);
 
+                    /* uint[] testGrid = new uint[chunkGridSize * chunkGridSize * chunkGridSize];
+                    chunkGridBuffer.GetData(testGrid);
+
+                    uint gridCount = 0;
+                    for (int i = 0; i < testGrid.Length; i++)
+                        gridCount += testGrid[i];
+                    Debug.Log($"Current grid count is {gridCount}"); */
+
                     batchBuffer.Release();
                     pointsCounted += batch.Length;
                     // watch.Stop();
                     // Debug.Log($"Batch processed in {watch.ElapsedMilliseconds} ms");
                     // Debug.Log($"Points counted: {pointsCounted}");
-                });
+                }));
 
                 pointsQueued += batch.Length;
             }
@@ -122,14 +141,11 @@ namespace FastPoints {
             Debug.Log($"[{(int)(watch.ElapsedMilliseconds / 1000)}]: Queued Counting");
 
             readQueue.Clear();
-            loadTask = data.LoadPointBatches(batchSize, readQueue, false);   // Start loading to get headstart while merging
+            loadTask = data.LoadPointBatches(batchSize, readQueue, false);   // Start loading to get head start while merging
 
-            while (unityActions.Count > 0) // Wait for unity thread to complete actions
-                Thread.Sleep(10);
+            Task.WaitAll(countTasks.ToArray());
 
             Debug.Log($"[{(int)(watch.ElapsedMilliseconds / 1000)}]: Done Counting");
-
-            watch.Stop();
 
             // Merge sparse chunks
 
@@ -138,22 +154,39 @@ namespace FastPoints {
             int sparseChunkCutoff = 10000000;    // Any chunk with more than sparseChunkCutoff points is written to disk
 
             uint[] levelGrid = new uint[chunkGridSize * chunkGridSize * chunkGridSize];
-            unityActions.Enqueue(() => { chunkGridBuffer.GetData(levelGrid); chunkGridBuffer.Release(); });
+            await ExecuteAction(() => { chunkGridBuffer.GetData(levelGrid); chunkGridBuffer.Release(); 
+                uint gridCount = 0;
+                for (int i = 0; i < levelGrid.Length; i++)
+                    gridCount += levelGrid[i];
+                Debug.Log($"Final grid count is {gridCount}");
+            });
 
-            while (unityActions.Count > 0)
-                Thread.Sleep(5);
+            if (doTests) {
+                uint gridCount = 0;
+                for (int i = 0; i < levelGrid.Length; i++)
+                    gridCount += levelGrid[i];
+                
+                if (gridCount != data.PointCount)
+                    Debug.LogError($"Grid test failed. Total count is {gridCount}");
+                else
+                    Debug.Log("Grid test passed");
+            }
+
+            Debug.Log($"[{(int)(watch.ElapsedMilliseconds / 1000)}]: Big Loop");
 
             for (int level = chunkDepth; level > 0; level--) {
                 int levelGridSize = (int)Mathf.Pow(levelGrid.Length, 1/3f);
 
                 Func<int, int, int, uint> levelGridIndex = (int x, int y, int z) => levelGrid[x * levelGridSize * levelGridSize + y * levelGridSize + z];
 
-                uint[] nextLevelGrid = new uint[(levelGridSize-1) * (levelGridSize-1) * (levelGridSize-1)];
+                uint[] nextLevelGrid = new uint[(levelGridSize/2) * (levelGridSize/2) * (levelGridSize/2)];
 
-                for (int x = 0; x < levelGridSize; x+=2)
+                Debug.Log($"[{(int)(watch.ElapsedMilliseconds / 1000)}]: On Level {level}. levelGridSize is {levelGridSize}, nextLevelGrid is {nextLevelGrid}");
+
+                for (int x = 0; x < levelGridSize; x+=2) {
                     for (int y = 0; y < levelGridSize; y+=2)
                         for (int z = 0; z < levelGridSize; z+=2) {
-                            Action addChunks = () => {
+                            void addChunks() {
                                 chunks.Add(new Chunk(x, y, z, level)); chunks.Add(new Chunk(x, y, z+1, level));
                                 chunks.Add(new Chunk(x, y+1, z, level)); chunks.Add(new Chunk(x, y+1, z+1, level));
                                 chunks.Add(new Chunk(x+1, y, z, level)); chunks.Add(new Chunk(x+1, y, z+1, level));
@@ -167,6 +200,7 @@ namespace FastPoints {
                                 levelGridIndex(x+1, y, z) == UInt32.MaxValue || levelGridIndex(x+1, y, z+1) == UInt32.MaxValue ||
                                 levelGridIndex(x+1, y+1, z) == UInt32.MaxValue || levelGridIndex(x+1, y+1, z+1) == UInt32.MaxValue) {
                                 addChunks();
+                                continue;
                             }
 
                             uint cubeSum =  
@@ -177,13 +211,20 @@ namespace FastPoints {
 
                             // If cube below threshold
                             if (cubeSum < sparseChunkCutoff)
-                                nextLevelGrid[x/2 * (levelGridSize-1) * (levelGridSize-1) + y/2 * (levelGridSize-1) + z/2] = cubeSum;
+                                nextLevelGrid[x/2 * (levelGridSize/2) * (levelGridSize/2) + y/2 * (levelGridSize/2) + z/2] = cubeSum;
                             else
                                 addChunks();
                         }
+                    // Debug.Log($"[{(int)(watch.ElapsedMilliseconds / 1000)}]: Did x {x}");
+                }
+
+                // Debug.Log($"[{(int)(watch.ElapsedMilliseconds / 1000)}]: Out of loop");
 
                 levelGrid = nextLevelGrid;
+                Debug.Log($"[{(int)(watch.ElapsedMilliseconds / 1000)}]: Did Level {level}");
             }
+
+            Debug.Log($"[{(int)(watch.ElapsedMilliseconds / 1000)}]: Done Merging");
 
             AABB[] chunkBBox = bbox.Subdivide(chunkGridSize);
 
@@ -216,50 +257,95 @@ namespace FastPoints {
                 }
             }
 
-            // Create chunk files
-            /* Directory.CreateDirectory($"{dirPath}/tmp");
+            Debug.Log($"[{(int)(watch.ElapsedMilliseconds / 1000)}]: Done LUT");
 
-            FileStream[] chunkStreams = new FileStream[];
-            List<Point>[] chunkBuffers = new List<Point>[chunks.Count];
+            /* if (doTests) {
+                uint gridCount = 0;
+                for (int i = 0; i < levelGrid.Length; i++)
+                    gridCount += levelGrid[i];
+                
+                if (gridCount != data.PointCount)
+                    Debug.LogError("Grid test failed");
+                else
+                    Debug.Log("Grid test passed");
+            }*/
+
+            // Create chunk files
+            Directory.CreateDirectory($"{dirPath}/tmp");
+
+            FileStream[] chunkStreams = new FileStream[chunks.Count];
+            (int, Point[])[] chunkBuffers = new (int, Point[])[chunks.Count];
 
             for (int i = 0; i < chunks.Count; i++) {
                 Chunk chunk = chunks[i];
-                chunks[i].path = $"{dirPath}/tmp/chunk_{chunk.x}_{chunk.y}_{chunk.z}_l{chunk.level}";
-                chunkStreams[i] = File.Create(chunks[i].path);
-                chunkBuffers[i] = new List<Point>();
+                chunk.path = $"{dirPath}/tmp/chunk_{chunk.x}_{chunk.y}_{chunk.z}_l{chunk.level}";
+                chunkStreams[i] = File.Create(chunk.path);
+                chunkBuffers[i] = (0, new Point[10]);
             }
 
             // Distribute points
-            ConcurrentQueue<(Point[], uint[])> sortedBatches;
+            ConcurrentQueue<(Point[], uint[])> sortedBatches = new ConcurrentQueue<(Point[], uint[])>();
             int maxSorted = 100;
 
+            
+            pointsQueued = 0;
+            int pointsSorted = 0;
+            int pointsWritten = 0;
+
             // Start writing
-            bool allDistributed = false;
             Task writeChunksTask = Task.Run(() => {
-                while (!allDistributed || sortedBatches.Count > 0) {
+                while (pointsWritten < data.PointCount) {
+                    Debug.Log("Writing points");
                     (Point[] batch, uint[] indices) tup;
-                    while (!sortedBatches.TryDequeue(out tup))
-                        Thread.Sleep(300);
+                    while (!sortedBatches.TryDequeue(out tup)) {}
+                        // Debug.Log("Waiting on batch to write");
+
+                    Debug.Log($"Writing batch of length {tup.batch.Length}");
 
                     for (int i = 0; i < tup.batch.Length; i++) {
+                        Debug.Log($"Buffered point {i+1}/{tup.batch.Length}, chunkIdx {lut[tup.indices[i]]}");
                         int chunkIdx = lut[tup.indices[i]];
-                        chunkBuffers[chunkIdx].Add(batch[i]);
-                        if (chunkBuffers[chunkIdx].Count == 10) {   // Flush when ten points queued
-                            chunkStreams[chunkIdx].Write(chunkBuffers[chunkIdx].ToArray());
-                            chunkBuffers[chunkIdx].Clear();
+                        Debug.Log("Adding point to buffer");
+                        (int idx, Point[] buffer) bufferTup = chunkBuffers[chunkIdx];
+                        Debug.Log("Got buffer");
+                        bufferTup.buffer[bufferTup.idx] = tup.batch[i];
+                        Debug.Log("Added point");
+                        bufferTup.idx++;
+                        Debug.Log("Incremented idx");
+                        if (bufferTup.idx == 10) {   // Flush when ten points queued
+                            Debug.Log("Flushing");
+                            chunkStreams[chunkIdx].Write(Point.ToBytes(chunkBuffers[chunkIdx].Item2));
+                            chunkBuffers[chunkIdx].Item1 = 0;
+                            Debug.Log("Flushed");
                         }
+                    }
+
+                    pointsWritten += tup.batch.Length;
+                    Debug.Log($"[{(int)(watch.ElapsedMilliseconds / 1000)}]: {pointsWritten} points written");
+                }
+
+                // Flush all
+                for (int i = 0; i < chunks.Count; i++) {
+                    if (chunkBuffers[i].Item1 > 0) {
+                        Point[] truncatedStream = new Point[chunkBuffers[i].Item1];
+                        for (int j = 0; j < truncatedStream.Length; j++)
+                            truncatedStream[j] = chunkBuffers[i].Item2[j];
+
+                        chunkStreams[i].Write(Point.ToBytes(truncatedStream));
+                        chunkBuffers[i].Item1 = 0;
                     }
                 }
             });
 
+            Debug.Log($"[{(int)(watch.ElapsedMilliseconds / 1000)}]: Started writing");
+
             // Sort points
-            while (loadTask.Status == TaskStatus.Running || readQueue.Count > 0) {
-                while (sortedBatches.Count > maxSorted)
-                    Thread.Sleep(300);
+            while (pointsQueued < data.PointCount) {
+                while (sortedBatches.Count > maxSorted) {}
 
                 Point[] batch;
-                while (!readQueue.TryDequeue(out batch))
-                    Thread.Sleep(300);   
+                while (!readQueue.TryDequeue(out batch)) {}
+                    // Debug.Log("Waiting on batch from disk");  
 
                 uint[] chunkIndices = new uint[batch.Length];             
 
@@ -279,16 +365,29 @@ namespace FastPoints {
 
                     sortedBuffer.GetData(chunkIndices);
                     sortedBuffer.Release();
+
+                    sortedBatches.Enqueue((batch, chunkIndices));
+                    pointsSorted += batch.Length;
+                    Debug.Log($"[{(int)(watch.ElapsedMilliseconds / 1000)}]: {pointsSorted} points sorted, {sortedBatches.Count} batches queued");
                 });
 
-                sortedBatches.Enqueue((batch, chunkIndices));
+                pointsQueued += batch.Length;
             }
 
-            allDistributed = true;
+            Debug.Log($"[{(int)(watch.ElapsedMilliseconds / 1000)}]: Queued sorting");
 
+            while (pointsSorted < data.PointCount) {}
+            
+            Debug.Log($"[{(int)(watch.ElapsedMilliseconds / 1000)}]: Done sorting");
+
+            while (pointsWritten < data.PointCount) {}
+
+            Debug.Log($"[{(int)(watch.ElapsedMilliseconds / 1000)}]: Done writing");
+
+            watch.Stop();
             // Subsample chunks
 
-            ThreadedWriter tw = new ThreadedWriter($"{dirPath}/octree.bin");
+            /* ThreadedWriter tw = new ThreadedWriter($"{dirPath}/octree.bin");
             tw.Start();
 
             for (int i = 0; i < chunks.Count; i++) {
@@ -296,10 +395,10 @@ namespace FastPoints {
                 BuildOctree(chunk, chunks[i].bbox, 2);  // Go two layers at a time to get shallow tree
             }
 
-            tw.Stop();
+            tw.Stop(); */
         }
 
-        Node BuildLocalOctree(Point[] points, AABB bbox, int layers) {
+        /* Node BuildLocalOctree(Point[] points, AABB bbox, int layers) {
             int maxNodeSize = 2000000;
             int totalNodeCount = (int)Mathf.Pow(8, layers);
             bool actionComplete = false;
@@ -373,8 +472,17 @@ namespace FastPoints {
                     
                 }
                 prevLayer = nextLayer;
-            }*/
+            }
 
+        } */
+
+        async Task ExecuteAction(Action a) {
+            bool actionCompleted = false;
+
+            unityActions.Enqueue(() => { a(); actionCompleted = true; });
+
+            while (!actionCompleted)
+                Thread.Sleep(5);
         }
     }
 

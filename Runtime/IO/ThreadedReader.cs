@@ -160,7 +160,7 @@ namespace FastPoints {
             fs.Seek(tp.start, SeekOrigin.Begin);
 
             int interval = (int)(((tp.end - tp.start) / (tp.count * tp.sampleSize)));
-            Debug.Log($"Interval is {interval}");
+            // Debug.Log($"Interval is {interval}");
 
             for (int i = 0; i < tp.count; i++) {
                 byte[] bytes = new byte[tp.sampleSize];

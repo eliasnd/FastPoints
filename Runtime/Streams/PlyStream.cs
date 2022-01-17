@@ -414,6 +414,49 @@ namespace FastPoints {
 
             return new Point(new Vector3(x, y, z), new Color(r / 255f, g / 255f, b / 255f, a / 255f));
         }
+
+        Point[] ReadPointsBLE(byte[] bytes) {
+            Point[] points = new Point[bytes.Length / pointSize];
+
+            for (int s = 0; s < points.Length; s++) {
+                float x = 0, y = 0, z = 0;
+                byte r = 255, g = 255, b = 255, a = 255;
+
+                int i = 0;
+
+                foreach (Property prop in properties) {
+                    switch (prop) {
+                        case Property.R8: r = bytes[pointSize*s+i]; i++; break;
+                        case Property.G8: g = bytes[pointSize*s+i]; i++; break;
+                        case Property.B8: b = bytes[pointSize*s+i]; i++; break;
+                        case Property.A8: a = bytes[pointSize*s+i]; i++; break;
+
+                        case Property.R16: r = (byte)(BitConverter.ToUInt16(bytes, pointSize*s+i) >> 8); i += 2; break;
+                        case Property.G16: g = (byte)(BitConverter.ToUInt16(bytes, pointSize*s+i) >> 8); i += 2; break;
+                        case Property.B16: b = (byte)(BitConverter.ToUInt16(bytes, pointSize*s+i) >> 8); i += 2; break;
+                        case Property.A16: a = (byte)(BitConverter.ToUInt16(bytes, pointSize*s+i) >> 8); i += 2; break;
+
+                        case Property.SINGLE_X: x = BitConverter.ToSingle(bytes, pointSize*s+i); i  += 4; break;
+                        case Property.SINGLE_Y: y = BitConverter.ToSingle(bytes, pointSize*s+i); i  += 4; break;
+                        case Property.SINGLE_Z: z = BitConverter.ToSingle(bytes, pointSize*s+i); i  += 4; break;
+
+                        case Property.DOUBLE_X: x = (float)BitConverter.ToDouble(bytes, pointSize*s+i); i += 8; break;
+                        case Property.DOUBLE_Y: y = (float)BitConverter.ToDouble(bytes, pointSize*s+i); i += 8; break;
+                        case Property.DOUBLE_Z: z = (float)BitConverter.ToDouble(bytes, pointSize*s+i); i += 8; break;
+
+                        case Property.DATA_8: i++; break;
+                        case Property.DATA_16: i += 2; break;
+                        case Property.DATA_32: i += 4; break;
+                        case Property.DATA_64: i += 8; break;
+                    }
+                }
+
+                points[s] = new Point(new Vector3(x, y, z), new Color(r / 255f, g / 255f, b / 255f, a / 255f));
+            }
+            
+
+            return points;
+        }
         
         Point ReadPointBBE(byte[] bytes, int startIdx=0) {                               
             throw new NotImplementedException();
@@ -444,6 +487,8 @@ namespace FastPoints {
                 ThreadedReader tr = new ThreadedReader(path, batchSize * pointSize, bQueue, bodyOffset, pointSize);
                 tr.StartReading();
 
+                int totalEnqueued = 0;
+
                 while (tr.IsRunning || bQueue.Count > 0) {
                     byte[] bytes;
                     while (!bQueue.TryDequeue(out bytes))
@@ -451,7 +496,16 @@ namespace FastPoints {
 
                     if (queue.Count >= maxQueued) {}
 
-                    queue.Enqueue(Point.ToPoints(bytes));
+                    // Point[] points = new Point[bytes.Length / pointSize];
+                    // for (int i = 0; i < points.Length; i++)
+                    //     points[i] = ReadPointBLE(bytes, i * pointSize);
+                    // queue.Enqueue(points);
+
+                    // queue.Enqueue(Point.ToPoints(bytes));
+                    Point[] batch = ReadPointsBLE(bytes);
+                    queue.Enqueue(batch);
+                    totalEnqueued += bytes.Length / pointSize;
+                    // Debug.Log($"Enqueued {totalEnqueued} bytes");
                 }
             });  
         }

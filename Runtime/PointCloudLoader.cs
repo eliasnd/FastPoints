@@ -30,9 +30,13 @@ namespace FastPoints {
         Thread treeThread;
         PointCloudData oldData = null;
 
-        public void Start() {
+        public void Awake() {
             actions = new ConcurrentQueue<Action>();
             computeShader = (ComputeShader)Resources.Load("CountAndSort");
+           foreach (var keywordName in computeShader.shaderKeywords)
+            {
+                Debug.Log("Local shader keyword " + keywordName + " is currently enabled");
+            }
         }
 
         public void Reset() {
