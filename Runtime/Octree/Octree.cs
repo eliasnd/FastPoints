@@ -38,11 +38,11 @@ namespace FastPoints {
             Debug.Log($"[{(int)(watch.ElapsedMilliseconds / 1000)}]: Starting");
 
             ConcurrentQueue<Point[]> readQueue = new ConcurrentQueue<Point[]>();
-            Task loadTask;
+            Task loadTask = null;
             if (data.MinPoint.x >= data.MaxPoint.x || data.MinPoint.y >= data.MaxPoint.y || data.MinPoint.z >= data.MaxPoint.z) 
-                loadTask = data.LoadPointBatches(batchSize, readQueue, true);
-            else
-                loadTask = data.LoadPointBatches(batchSize, readQueue, false);
+                loadTask = data.PopulateBounds();
+
+            data.LoadPointBatches(batchSize, readQueue);
 
             // Debug.Log("Started task");
 
@@ -57,10 +57,16 @@ namespace FastPoints {
 
             // Debug.Log("Waiting on bounds");
 
-            while (data.MinPoint.x >= data.MaxPoint.x || data.MinPoint.y >= data.MaxPoint.y || data.MinPoint.z >= data.MaxPoint.z)
-                Thread.Sleep(300);  // Block until bounds populated
+            // while (data.MinPoint.x >= data.MaxPoint.x || data.MinPoint.y >= data.MaxPoint.y || data.MinPoint.z >= data.MaxPoint.z)
+                // Thread.Sleep(300);  // Block until bounds populated
+
+            if (loadTask != null)
+                await loadTask;
 
             // Debug.Log("Bounds populated");
+
+            Debug.Log($"Min Point: {data.MinPoint.ToString()}");
+            Debug.Log($"Max Point: {data.MaxPoint.ToString()}");
 
             float[] minPoint = new float[] { data.MinPoint.x-1E-5f, data.MinPoint.y-1E-5f, data.MinPoint.z-1E-5f };
             float[] maxPoint = new float[] { data.MaxPoint.x+1E-5f, data.MaxPoint.y+1E-5f, data.MaxPoint.z+1E-5f };
@@ -103,6 +109,12 @@ namespace FastPoints {
                 while (!readQueue.TryDequeue(out batch))
                     Thread.Sleep(5);
 
+                /* foreach (Point pt in batch) {
+                    if (pt.pos.x < data.MinPoint.x || pt.pos.y < data.MinPoint.y || pt.pos.z < data.MinPoint.z ||
+                        pt.pos.x > data.MaxPoint.x || pt.pos.y > data.MaxPoint.y || pt.pos.z > data.MaxPoint.z)
+                        Debug.LogError($"Point OOB: {pt.ToString()}");
+                } */
+
                 // Debug.Log("Dequeued batch");
 
                 countTasks.Add(ExecuteAction(() => {
@@ -141,7 +153,7 @@ namespace FastPoints {
             Debug.Log($"[{(int)(watch.ElapsedMilliseconds / 1000)}]: Queued Counting");
 
             readQueue.Clear();
-            loadTask = data.LoadPointBatches(batchSize, readQueue, false);   // Start loading to get head start while merging
+            loadTask = data.LoadPointBatches(batchSize, readQueue);   // Start loading to get head start while merging
 
             Task.WaitAll(countTasks.ToArray());
 

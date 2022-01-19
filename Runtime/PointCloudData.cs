@@ -62,12 +62,12 @@ namespace FastPoints {
             UnityEngine.Debug.Log($"Decimated cloud loaded in {watch.ElapsedMilliseconds} ms");
         }
 
-        public async Task LoadPointBatches(int batchSize, ConcurrentQueue<Point[]> batches, bool populateBoundsAsync = false) {
+        public async Task LoadPointBatches(int batchSize, ConcurrentQueue<Point[]> batches) {
             // Maximum allow queue of 32 MB
             int maxQueued = (32 * Utils.MB) / (batchSize * 15);
             BaseStream stream = handle.GetStream();
 
-            Task t1 = Task.Run(() => {
+            await Task.Run(() => {
                 /* for (int i = 0; i < count / batchSize; i++) {
                     Point[] batch = new Point[batchSize];
                     stream.ReadPoints(batchSize, batch);
@@ -85,56 +85,48 @@ namespace FastPoints {
                     maxPoint = stream.MaxPoint;
                 } */
             });
+        }
 
-            // Async bounds
-            Task t2 = Task.Run(() => {
-                if (populateBoundsAsync && handle.Type == PointCloudHandle.FileType.PLY) {
-                    PlyStream scanStream = (PlyStream)handle.GetStream();
-                    ConcurrentQueue<Point[]> scanBatches = new ConcurrentQueue<Point[]>();
-                    Task t = stream.ReadPointsToQueue(scanBatches, maxQueued, batchSize);
+        public async Task PopulateBounds() {
+            await Task.Run(() => {
+                ConcurrentQueue<Point[]> batches = new ConcurrentQueue<Point[]>();
 
-                    minPoint = new Vector3(float.MaxValue, float.MaxValue, float.MaxValue);
-                    maxPoint = new Vector3(float.MinValue, float.MinValue, float.MinValue);
+                BaseStream stream = handle.GetStream();
+                stream.ReadPointsToQueue(batches, 10, 1000000);
 
-                    int pointsScanned = 0;
+                minPoint = new Vector3(float.MaxValue, float.MaxValue, float.MaxValue);
+                maxPoint = new Vector3(float.MinValue, float.MinValue, float.MinValue);
 
-                    while (pointsScanned < count) {
-                        Point[] scanBatch;
-                        while (!scanBatches.TryDequeue(out scanBatch)) {}
+                int pointsScanned = 0;
 
-                        foreach (Point p in scanBatch) {
-                            minPoint = Vector3.Min(minPoint, p.pos);
-                            maxPoint = Vector3.Max(maxPoint, p.pos);
-                        }
+                while (pointsScanned < count) {
+                    Point[] batch;
+                    while (!batches.TryDequeue(out batch)) {}
 
-                        pointsScanned += scanBatch.Length;
+                    Vector3 minBatch = new Vector3(float.MaxValue, float.MaxValue, float.MaxValue);
+                    Vector3 maxBatch = new Vector3(float.MinValue, float.MinValue, float.MinValue);
+
+                    foreach (Point p in batch) {
+                        minBatch = Vector3.Min(minBatch, p.pos);
+                        maxBatch = Vector3.Max(maxBatch, p.pos);
+
+                        // if (p.pos.x < minPoint.x || p.pos.y < minPoint.y || p.pos.z < minPoint.z)
+                        //     minPoint = new Vector3(Mathf.Min(p.pos.x, minPoint.x), Mathf.Min(p.pos.y, minPoint.y), Mathf.Min(p.pos.z, minPoint.z));
+                        // if (p.pos.x > maxPoint.x || p.pos.y > maxPoint.y || p.pos.z > maxPoint.z)
+                        //     maxPoint = new Vector3(Mathf.Max(p.pos.x, maxPoint.x), Mathf.Max(p.pos.y, maxPoint.y), Mathf.Max(p.pos.z, maxPoint.z));
+                            
+
+                        minPoint = Vector3.Min(minPoint, p.pos);
+                        maxPoint = Vector3.Max(maxPoint, p.pos);
                     }
 
+                    pointsScanned += batch.Length;
 
-                    /* scanStream.SetComputeBounds(true);
-
-                    Debug.Log("Set compute bounds");
-
-                    Point[] batch = new Point[batchSize];
-                    for (int i = 0; i < count / batchSize; i++) {
-                        scanStream.ReadPoints(batchSize, batch);
-                        Debug.Log($"Scanning batch {i+1}/{(int)(count / batchSize)}");
-                    }
-
-                    batch = new Point[count % batchSize];
-                    scanStream.ReadPoints(count % batchSize, batch);
-
-                    Debug.Log($"Scanning batch {(int)(count / batchSize)}/{(int)(count / batchSize)}");
-
-                    minPoint = scanStream.MinPoint;
-                    maxPoint = scanStream.MaxPoint; */
-
-                    Debug.Log($"Preliminarily populated bounds {minPoint.ToString()}, {maxPoint.ToString()}");
+                    Debug.Log($"Min point: {minBatch.ToString()}, max point: {maxBatch.ToString()}");
                 }
-            });
 
-            await t2;
-            await t1;
+                Debug.Log($"Preliminarily populated bounds {minPoint.ToString()}, {maxPoint.ToString()}");
+            });
         }
     }
 }
