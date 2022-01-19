@@ -125,7 +125,7 @@ namespace FastPoints {
             }
         }
 
-        public override async Task SamplePoints(int pointCount, Point[] target) {
+        /* public override async Task SamplePoints(int pointCount, Point[] target) {
             await Task.Run(() => {
                 Debug.Log($"Calling sample points. Format {format}, body offset {bodyOffset}");
                 if (format != Format.BINARY_LITTLE_ENDIAN)
@@ -169,6 +169,57 @@ namespace FastPoints {
             });
 
             Debug.Log("Done sampling");
+        } */
+
+        public override async Task SamplePoints(int pointCount, Point[] target) {
+            await Task.Run(() => {
+                Debug.Log("Sampling started");
+
+                if (format == Format.INVALID)
+                    ReadHeader();
+
+                int interval = count / pointCount;
+                int lineLength;
+
+                if (interval < 1)
+                    throw new ArgumentException("pointCount cannot exceed cloud size");
+
+                Debug.Log($"Interval is {interval}");
+
+                lineLength = CalculatePointBytes(); 
+                bool allPointsRead = false;
+                
+                bool result = false;
+
+                switch (format) {
+                    case Format.BINARY_LITTLE_ENDIAN:
+                        for (int i = 0; i < pointCount; i++) {
+                            target[i] = ReadPointBLE(bReader.ReadBytes(lineLength));
+                            stream.Seek(lineLength * (interval - 1), SeekOrigin.Current);
+                            // Debug.Log($"Sampled point {i}");
+                        }
+                        allPointsRead = true;
+                        UnityEngine.Debug.Log("Done sampling points");
+                        break;
+                    case Format.BINARY_BIG_ENDIAN:
+                        for (int i = 0; i < pointCount; i++) {
+                            target[i] = ReadPointBBE(bReader.ReadBytes(lineLength));
+                            stream.Seek(lineLength * (interval - 1), SeekOrigin.Current);
+                        }
+                        allPointsRead = true;
+                        UnityEngine.Debug.Log("Done sampling points");
+                        break;
+                    case Format.ASCII:
+                        for (int i = 0; i < pointCount; i++) {
+                            target[i] = ReadPointASCII(sReader.ReadLine());
+                            for (int j = 0; j < interval-1; j++)
+                                sReader.ReadLine();
+                            
+                        }
+                        allPointsRead = true;
+                        break;
+                }
+            });
         }
 
         /* public override async Task SamplePoints(int pointCount, Point[] target) {
@@ -180,8 +231,6 @@ namespace FastPoints {
 
             if (interval < 1)
                 throw new ArgumentException("pointCount cannot exceed cloud size");
-
-            Debug.Log($"Interval is {interval}");
 
             ConcurrentQueue<byte[]> readBinaryPoints = new ConcurrentQueue<byte[]>();
             ConcurrentQueue<string> readASCIIPoints = new ConcurrentQueue<string>();
@@ -485,7 +534,7 @@ namespace FastPoints {
                 ConcurrentQueue<byte[]> bQueue = new ConcurrentQueue<byte[]>();
 
                 ThreadedReader tr = new ThreadedReader(path, batchSize * pointSize, bQueue, bodyOffset, pointSize);
-                tr.StartReading();
+                tr.Start();
 
                 int totalEnqueued = 0;
 
@@ -496,16 +545,9 @@ namespace FastPoints {
 
                     if (queue.Count >= maxQueued) {}
 
-                    // Point[] points = new Point[bytes.Length / pointSize];
-                    // for (int i = 0; i < points.Length; i++)
-                    //     points[i] = ReadPointBLE(bytes, i * pointSize);
-                    // queue.Enqueue(points);
-
-                    // queue.Enqueue(Point.ToPoints(bytes));
                     Point[] batch = ReadPointsBLE(bytes);
                     queue.Enqueue(batch);
                     totalEnqueued += bytes.Length / pointSize;
-                    // Debug.Log($"Enqueued {totalEnqueued} bytes");
                 }
             });  
         }

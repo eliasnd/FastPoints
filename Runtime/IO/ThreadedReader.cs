@@ -20,7 +20,6 @@ namespace FastPoints {
         public bool IsRunning { get { return activeThreads > 0; } }
 
         (ReadThreadParams p, Thread t)[] readThreads;
-        (SampleThreadParams p, Thread t)[] sampleThreads;
         int threadCount = 10;
         int activeThreads;
 
@@ -64,6 +63,8 @@ namespace FastPoints {
                 readThreads[i].Item2.Start(readThreads[i].Item1);
                 Interlocked.Add(ref activeThreads, 1);
             }
+
+            return true;
         }
 
         static void ReadThread(object obj) {
@@ -71,7 +72,7 @@ namespace FastPoints {
 
             ConcurrentQueue<byte[]> queue = tp.readQueue;
 
-            Debug.Log($"Read thread at offset {tp.offset}");
+            // Debug.Log($"Read thread at offset {tp.offset}");
 
             FileStream fs = File.Open(tp.filePath, FileMode.Open, FileAccess.Read, FileShare.Read);
             fs.Seek(tp.offset, SeekOrigin.Begin);

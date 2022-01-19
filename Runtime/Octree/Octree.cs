@@ -38,9 +38,8 @@ namespace FastPoints {
             Debug.Log($"[{(int)(watch.ElapsedMilliseconds / 1000)}]: Starting");
 
             ConcurrentQueue<Point[]> readQueue = new ConcurrentQueue<Point[]>();
-            Task loadTask = null;
             if (data.MinPoint.x >= data.MaxPoint.x || data.MinPoint.y >= data.MaxPoint.y || data.MinPoint.z >= data.MaxPoint.z) 
-                loadTask = data.PopulateBounds();
+                await data.PopulateBounds();
 
             data.LoadPointBatches(batchSize, readQueue);
 
@@ -59,9 +58,6 @@ namespace FastPoints {
 
             // while (data.MinPoint.x >= data.MaxPoint.x || data.MinPoint.y >= data.MaxPoint.y || data.MinPoint.z >= data.MaxPoint.z)
                 // Thread.Sleep(300);  // Block until bounds populated
-
-            if (loadTask != null)
-                await loadTask;
 
             // Debug.Log("Bounds populated");
 
@@ -153,7 +149,7 @@ namespace FastPoints {
             Debug.Log($"[{(int)(watch.ElapsedMilliseconds / 1000)}]: Queued Counting");
 
             readQueue.Clear();
-            loadTask = data.LoadPointBatches(batchSize, readQueue);   // Start loading to get head start while merging
+            data.LoadPointBatches(batchSize, readQueue);   // Start loading to get head start while merging
 
             Task.WaitAll(countTasks.ToArray());
 

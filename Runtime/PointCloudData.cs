@@ -68,22 +68,7 @@ namespace FastPoints {
             BaseStream stream = handle.GetStream();
 
             await Task.Run(() => {
-                /* for (int i = 0; i < count / batchSize; i++) {
-                    Point[] batch = new Point[batchSize];
-                    stream.ReadPoints(batchSize, batch);
-                    batches.Enqueue(batch);                    
-                    while (batches.Count >= maxQueued) Thread.Sleep(75);   // Wait for queue to empty enough for new batch
-                }
-
-                Point[] lastBatch = new Point[count % batchSize];
-                stream.ReadPoints(count % batchSize, lastBatch);
-                batches.Enqueue(lastBatch); */
                 stream.ReadPointsToQueue(batches, maxQueued, batchSize);
-
-                /* if (!populateBoundsAsync && handle.Type == PointCloudHandle.FileType.PLY) {
-                    minPoint = stream.MinPoint;
-                    maxPoint = stream.MaxPoint;
-                } */
             });
         }
 
@@ -92,7 +77,7 @@ namespace FastPoints {
                 ConcurrentQueue<Point[]> batches = new ConcurrentQueue<Point[]>();
 
                 BaseStream stream = handle.GetStream();
-                stream.ReadPointsToQueue(batches, 10, 1000000);
+                stream.ReadPointsToQueue(batches, 10, 100000);
 
                 minPoint = new Vector3(float.MaxValue, float.MaxValue, float.MaxValue);
                 maxPoint = new Vector3(float.MinValue, float.MinValue, float.MinValue);
@@ -107,22 +92,13 @@ namespace FastPoints {
                     Vector3 maxBatch = new Vector3(float.MinValue, float.MinValue, float.MinValue);
 
                     foreach (Point p in batch) {
-                        minBatch = Vector3.Min(minBatch, p.pos);
-                        maxBatch = Vector3.Max(maxBatch, p.pos);
-
-                        // if (p.pos.x < minPoint.x || p.pos.y < minPoint.y || p.pos.z < minPoint.z)
-                        //     minPoint = new Vector3(Mathf.Min(p.pos.x, minPoint.x), Mathf.Min(p.pos.y, minPoint.y), Mathf.Min(p.pos.z, minPoint.z));
-                        // if (p.pos.x > maxPoint.x || p.pos.y > maxPoint.y || p.pos.z > maxPoint.z)
-                        //     maxPoint = new Vector3(Mathf.Max(p.pos.x, maxPoint.x), Mathf.Max(p.pos.y, maxPoint.y), Mathf.Max(p.pos.z, maxPoint.z));
-                            
-
                         minPoint = Vector3.Min(minPoint, p.pos);
                         maxPoint = Vector3.Max(maxPoint, p.pos);
                     }
 
                     pointsScanned += batch.Length;
 
-                    Debug.Log($"Min point: {minBatch.ToString()}, max point: {maxBatch.ToString()}");
+                    // Debug.Log($"Min point: {minBatch.ToString()}, max point: {maxBatch.ToString()}");
                 }
 
                 Debug.Log($"Preliminarily populated bounds {minPoint.ToString()}, {maxPoint.ToString()}");
