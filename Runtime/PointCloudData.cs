@@ -15,6 +15,7 @@ namespace FastPoints {
         public PointCloudHandle handle;
         
         public Point[] decimatedCloud;
+        public uint[] chunkCounts;  // ONLY FOR DEVELOPMENT
 
         [SerializeField]
         int count;
@@ -40,7 +41,6 @@ namespace FastPoints {
 
 
         public void Initialize() {
-            Debug.Log("Initialize");
             BaseStream stream = handle.GetStream();
             count = stream.PointCount;
 
@@ -59,7 +59,7 @@ namespace FastPoints {
             
             decimatedGenerated = true;
             watch.Stop();
-            UnityEngine.Debug.Log($"Decimated cloud loaded in {watch.ElapsedMilliseconds} ms");
+            Debug.Log($"Decimated cloud loaded in {watch.ElapsedMilliseconds} ms");
         }
 
         public async Task LoadPointBatches(int batchSize, ConcurrentQueue<Point[]> batches) {
@@ -75,14 +75,14 @@ namespace FastPoints {
         public async Task PopulateBounds() {
             await Task.Run(() => {
                 ConcurrentQueue<Point[]> batches = new ConcurrentQueue<Point[]>();
-
-                BaseStream stream = handle.GetStream();
-                stream.ReadPointsToQueue(batches, 10, 100000);
+                _ = LoadPointBatches(1000000, batches);
 
                 minPoint = new Vector3(float.MaxValue, float.MaxValue, float.MaxValue);
                 maxPoint = new Vector3(float.MinValue, float.MinValue, float.MinValue);
 
                 int pointsScanned = 0;
+
+                int j = 0;
 
                 while (pointsScanned < count) {
                     Point[] batch;
@@ -91,14 +91,16 @@ namespace FastPoints {
                     Vector3 minBatch = new Vector3(float.MaxValue, float.MaxValue, float.MaxValue);
                     Vector3 maxBatch = new Vector3(float.MinValue, float.MinValue, float.MinValue);
 
-                    foreach (Point p in batch) {
+                    int i = 0;
+                    foreach (Point p in batch) { 
                         minPoint = Vector3.Min(minPoint, p.pos);
                         maxPoint = Vector3.Max(maxPoint, p.pos);
+                        i++;
                     }
 
-                    pointsScanned += batch.Length;
+                    j += i;
 
-                    // Debug.Log($"Min point: {minBatch.ToString()}, max point: {maxBatch.ToString()}");
+                    pointsScanned += batch.Length;
                 }
 
                 Debug.Log($"Preliminarily populated bounds {minPoint.ToString()}, {maxPoint.ToString()}");

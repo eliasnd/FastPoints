@@ -390,6 +390,7 @@ namespace FastPoints {
             pointSize = CalculatePointBytes();
 
             stream.Position = bodyOffset;
+            // Debug.Log($"Body offset is {bodyOffset}");
         } 
 
         Point ReadPointASCII(string str) {
@@ -533,12 +534,12 @@ namespace FastPoints {
             await Task.Run(() => {
                 ConcurrentQueue<byte[]> bQueue = new ConcurrentQueue<byte[]>();
 
-                ThreadedReader tr = new ThreadedReader(path, batchSize * pointSize, bQueue, bodyOffset, pointSize);
+                ThreadedReader tr = new ThreadedReader(path, batchSize * pointSize, bQueue, bodyOffset, pointSize, 5);
                 tr.Start();
 
                 int totalEnqueued = 0;
 
-                while (tr.IsRunning || bQueue.Count > 0) {
+                while (totalEnqueued < count) {
                     byte[] bytes;
                     while (!bQueue.TryDequeue(out bytes))
                         Thread.Sleep(5);
@@ -546,7 +547,19 @@ namespace FastPoints {
                     if (queue.Count >= maxQueued) {}
 
                     Point[] batch = ReadPointsBLE(bytes);
+                    //Point[] batch = Point.ToPoints(bytes);
+                    //int c1 = 0, c2 = 0;
                     queue.Enqueue(batch);
+                    //Debug.Log("Dequeued bytes");
+                    //foreach (Point p in batch)
+                    //{
+                    //    if (p.pos.x < -11)
+                    //        c1++;
+                    //    if (p.pos.x > 11)
+                    //        c2++;
+                    //}
+                    //if (c1 > 0 || c2 > 0)
+                    //    Debug.Log($"Batch contains {c1} small points, {c2} big points");
                     totalEnqueued += bytes.Length / pointSize;
                 }
             });  

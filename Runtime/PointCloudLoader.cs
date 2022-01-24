@@ -24,6 +24,8 @@ namespace FastPoints {
         public int treeLevels = 5;
         #endregion
 
+        int actionsPerFrame = 2;
+
         ConcurrentQueue<Action> actions;
         ComputeShader computeShader;
         Octree tree;
@@ -67,19 +69,22 @@ namespace FastPoints {
                 if (!data.Init)
                     data.Initialize();
                 if (!data.DecimatedGenerated)
-                    data.PopulateSparseCloud(decimatedCloudSize);
+                    _ = data.PopulateSparseCloud(decimatedCloudSize);
 
                 if (generateTree) {
                     tree = new Octree(treeLevels, "Resources/Octree", actions);
                     treeThread = new Thread(new ParameterizedThreadStart(BuildTreeThread));
+                    Debug.Log("Starting octree thread");
                     treeThread.Start(new BuildTreeParams(tree, data));
                 }
             }
 
-            if (actions.Count > 0) {
-                Action action;
-                actions.TryDequeue(out action);
-                action();
+            for (int i = 0; i < actionsPerFrame; i++) {
+                if (actions.Count > 0) {
+                    Action action;
+                    actions.TryDequeue(out action);
+                    action();
+                }
             }
 
             // if (!treeThread.IsAlive)

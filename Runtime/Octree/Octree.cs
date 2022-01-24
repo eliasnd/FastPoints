@@ -26,6 +26,10 @@ namespace FastPoints {
 
         bool doTests = true;
 
+        // Debug
+        Stopwatch watch;
+        TimeSpan checkpoint = new TimeSpan();
+
         public Octree(int treeDepth, string dirPath, ConcurrentQueue<Action> unityActions) {
             this.treeDepth = treeDepth;
             this.unityActions = unityActions;
@@ -33,19 +37,19 @@ namespace FastPoints {
         }
 
         public async Task BuildTree(PointCloudData data) {
-            Stopwatch watch = new Stopwatch();
+            watch = new Stopwatch();
             watch.Start();
-            Debug.Log($"[{(int)(watch.ElapsedMilliseconds / 1000)}]: Starting");
+            Checkpoint("Starting");
 
             ConcurrentQueue<Point[]> readQueue = new ConcurrentQueue<Point[]>();
             if (data.MinPoint.x >= data.MaxPoint.x || data.MinPoint.y >= data.MaxPoint.y || data.MinPoint.z >= data.MaxPoint.z) 
                 await data.PopulateBounds();
 
-            data.LoadPointBatches(batchSize, readQueue);
+            _ = data.LoadPointBatches(batchSize, readQueue);
 
             // Debug.Log("Started task");
 
-            int chunkDepth = 7;
+            int chunkDepth = 5;
             int chunkGridSize = (int)Mathf.Pow(2, chunkDepth);
             // Debug.Log("Allocating compute buffer");
             ComputeBuffer chunkGridBuffer = null;    // Can't allocate from thread - have to trickery to get around type checker
@@ -81,17 +85,14 @@ namespace FastPoints {
                 computeShader.SetFloats("_MinPoint", minPoint);
                 computeShader.SetFloats("_MaxPoint", maxPoint);
 
-                computeShader.SetInt("_NodeCount", chunkGridSize * chunkGridSize * chunkGridSize);
+                computeShader.SetInt("_NodeCount", chunkGridSize);
                 computeShader.SetBuffer(computeShader.FindKernel("CountPoints"), "_Counts", chunkGridBuffer);
                 computeShader.SetInt("_ThreadBudget", threadBudget);
             });
 
             // Debug.Log("Added action");
 
-            /* while (unityActions.Count > 0) // Wait for unity thread to complete action
-                    Thread.Sleep(5); */
-
-            Debug.Log($"[{(int)(watch.ElapsedMilliseconds / 1000)}]: Starting counting");
+            Checkpoint("Starting counting");
 
             // Debug.Log($"Counting, size {System.Runtime.InteropServices.Marshal.SizeOf<Point>()}");
             int pointsCounted = 0;
@@ -105,11 +106,11 @@ namespace FastPoints {
                 while (!readQueue.TryDequeue(out batch))
                     Thread.Sleep(5);
 
-                /* foreach (Point pt in batch) {
-                    if (pt.pos.x < data.MinPoint.x || pt.pos.y < data.MinPoint.y || pt.pos.z < data.MinPoint.z ||
-                        pt.pos.x > data.MaxPoint.x || pt.pos.y > data.MaxPoint.y || pt.pos.z > data.MaxPoint.z)
-                        Debug.LogError($"Point OOB: {pt.ToString()}");
-                } */
+                // foreach (Point pt in batch) {
+                //     if (pt.pos.x < data.MinPoint.x || pt.pos.y < data.MinPoint.y || pt.pos.z < data.MinPoint.z ||
+                //         pt.pos.x > data.MaxPoint.x || pt.pos.y > data.MaxPoint.y || pt.pos.z > data.MaxPoint.z)
+                //         Debug.LogError($"Point OOB: {pt.ToString()}");
+                // }
 
                 // Debug.Log("Dequeued batch");
 
@@ -128,14 +129,6 @@ namespace FastPoints {
                     computeShader.SetInt("_BatchSize", batch.Length);
                     computeShader.Dispatch(countHandle, 64, 1, 1);
 
-                    /* uint[] testGrid = new uint[chunkGridSize * chunkGridSize * chunkGridSize];
-                    chunkGridBuffer.GetData(testGrid);
-
-                    uint gridCount = 0;
-                    for (int i = 0; i < testGrid.Length; i++)
-                        gridCount += testGrid[i];
-                    Debug.Log($"Current grid count is {gridCount}"); */
-
                     batchBuffer.Release();
                     pointsCounted += batch.Length;
                     // watch.Stop();
@@ -146,14 +139,14 @@ namespace FastPoints {
                 pointsQueued += batch.Length;
             }
 
-            Debug.Log($"[{(int)(watch.ElapsedMilliseconds / 1000)}]: Queued Counting");
+            Checkpoint("Queued Counting");
 
             readQueue.Clear();
             data.LoadPointBatches(batchSize, readQueue);   // Start loading to get head start while merging
 
             Task.WaitAll(countTasks.ToArray());
 
-            Debug.Log($"[{(int)(watch.ElapsedMilliseconds / 1000)}]: Done Counting");
+            Checkpoint("Done Counting");
 
             // Merge sparse chunks
 
@@ -161,26 +154,33 @@ namespace FastPoints {
 
             int sparseChunkCutoff = 10000000;    // Any chunk with more than sparseChunkCutoff points is written to disk
 
-            uint[] levelGrid = new uint[chunkGridSize * chunkGridSize * chunkGridSize];
-            await ExecuteAction(() => { chunkGridBuffer.GetData(levelGrid); chunkGridBuffer.Release(); 
-                uint gridCount = 0;
-                for (int i = 0; i < levelGrid.Length; i++)
-                    gridCount += levelGrid[i];
-                Debug.Log($"Final grid count is {gridCount}");
-            });
+            uint[] leafCounts = new uint[chunkGridSize * chunkGridSize * chunkGridSize];
+            await ExecuteAction(() => { chunkGridBuffer.GetData(leafCounts); chunkGridBuffer.Release(); });
 
-            if (doTests) {
-                uint gridCount = 0;
-                for (int i = 0; i < levelGrid.Length; i++)
-                    gridCount += levelGrid[i];
+            uint[] levelGrid = leafCounts;
+            // data.chunkCounts = leafCounts;
+
+            // IF CHUNKCOUNTS POPULATED
+
+            // List<Chunk> chunks = new List<Chunk>();
+
+            // int sparseChunkCutoff = 10000000;    // Any chunk with more than sparseChunkCutoff points is written to disk
+
+            // uint[] levelGrid = data.chunkCounts;
+
+            // if (doTests) {
+            //     uint gridCount = 0;
+            //     for (int i = 0; i < levelGrid.Length; i++)
+            //         gridCount += levelGrid[i];
                 
-                if (gridCount != data.PointCount)
-                    Debug.LogError($"Grid test failed. Total count is {gridCount}");
-                else
-                    Debug.Log("Grid test passed");
-            }
+            //     if (gridCount != data.PointCount)
+            //         Debug.LogError($"Grid test failed. Total count is {gridCount}");
+            //     else
+            //         Debug.Log("Grid test passed");
+            // }
 
-            Debug.Log($"[{(int)(watch.ElapsedMilliseconds / 1000)}]: Big Loop");
+
+            Checkpoint("Big Loop");
 
             for (int level = chunkDepth; level > 0; level--) {
                 int levelGridSize = (int)Mathf.Pow(levelGrid.Length, 1/3f);
@@ -189,18 +189,41 @@ namespace FastPoints {
 
                 uint[] nextLevelGrid = new uint[(levelGridSize/2) * (levelGridSize/2) * (levelGridSize/2)];
 
-                Debug.Log($"[{(int)(watch.ElapsedMilliseconds / 1000)}]: On Level {level}. levelGridSize is {levelGridSize}, nextLevelGrid is {nextLevelGrid}");
+                Checkpoint($"On Level {level}. levelGridSize is {levelGridSize}, nextLevelGrid is {levelGridSize/2}");
 
                 for (int x = 0; x < levelGridSize; x+=2) {
                     for (int y = 0; y < levelGridSize; y+=2)
                         for (int z = 0; z < levelGridSize; z+=2) {
+                            // if (level < 4)
+                            //     Checkpoint($"X: {x}, Y: {y}, Z: {z}");
                             void addChunks() {
-                                chunks.Add(new Chunk(x, y, z, level)); chunks.Add(new Chunk(x, y, z+1, level));
-                                chunks.Add(new Chunk(x, y+1, z, level)); chunks.Add(new Chunk(x, y+1, z+1, level));
-                                chunks.Add(new Chunk(x+1, y, z, level)); chunks.Add(new Chunk(x+1, y, z+1, level));
-                                chunks.Add(new Chunk(x+1, y+1, z, level)); chunks.Add(new Chunk(x+1, y+1, z+1, level));
-                                nextLevelGrid[x/2 * (levelGridSize-1) * (levelGridSize-1) + y/2 * (levelGridSize-1) + z/2] = UInt32.MaxValue;
+                                // if (level < 4)
+                                //     Checkpoint($"Adding chunks to idx {x/2}, {y/2}, {z/2}");
+                                if (levelGridIndex(x, y, z) != UInt32.MaxValue)
+                                    chunks.Add(new Chunk(x, y, z, level, levelGridIndex(x, y, z))); 
+                                if (levelGridIndex(x, y, z+1) != UInt32.MaxValue)
+                                    chunks.Add(new Chunk(x, y, z+1, level, levelGridIndex(x, y, z+1)));
+                                if (levelGridIndex(x, y+1, z) != UInt32.MaxValue)
+                                    chunks.Add(new Chunk(x, y+1, z, level, levelGridIndex(x, y+1, z))); 
+                                if (levelGridIndex(x, y+1, z+1) != UInt32.MaxValue)
+                                    chunks.Add(new Chunk(x, y+1, z+1, level, levelGridIndex(x, y+1, z+1)));
+                                if (levelGridIndex(x+1, y, z) != UInt32.MaxValue)
+                                    chunks.Add(new Chunk(x+1, y, z, level, levelGridIndex(x+1, y, z))); 
+                                if (levelGridIndex(x+1, y, z+1) != UInt32.MaxValue)
+                                    chunks.Add(new Chunk(x+1, y, z+1, level, levelGridIndex(x+1, y, z+1)));
+                                if (levelGridIndex(x+1, y+1, z) != UInt32.MaxValue)
+                                    chunks.Add(new Chunk(x+1, y+1, z, level, levelGridIndex(x+1, y+1, z))); 
+                                if (levelGridIndex(x+1, y+1, z+1) != UInt32.MaxValue)
+                                    chunks.Add(new Chunk(x+1, y+1, z+1, level, levelGridIndex(x+1, y+1, z+1)));
+                                // if (level < 4)
+                                //     Checkpoint($"Added chunks, setting nextlevelGrid of length {nextLevelGrid.Length} at idx {x/2 * (levelGridSize-1) * (levelGridSize-1) + y/2 * (levelGridSize-1) + z/2}");
+                                nextLevelGrid[x/2 * (levelGridSize/2) * (levelGridSize/2) + y/2 * (levelGridSize/2) + z/2] = UInt32.MaxValue;
+                                // if (level < 4)
+                                //     Checkpoint("Set nextlevelgrid");
                             };
+
+                            // if (level < 4)
+                            //     Checkpoint($"Got here1");
 
                             // If any chunks in cube previously added
                             if (levelGridIndex(x, y, z) == UInt32.MaxValue || levelGridIndex(x, y, z+1) == UInt32.MaxValue ||
@@ -211,11 +234,17 @@ namespace FastPoints {
                                 continue;
                             }
 
+                            // if (level < 4)
+                            //     Checkpoint($"Got here2");
+
                             uint cubeSum =  
                                 levelGridIndex(x, y, z) + levelGridIndex(x, y, z+1) + 
                                 levelGridIndex(x, y+1, z) + levelGridIndex(x, y+1, z+1) + 
                                 levelGridIndex(x+1, y, z) + levelGridIndex(x+1, y, z+1) + 
                                 levelGridIndex(x+1, y+1, z) + levelGridIndex(x+1, y+1, z+1);
+
+                            // if (level < 4)
+                            //     Checkpoint($"Got here3");
 
                             // If cube below threshold
                             if (cubeSum < sparseChunkCutoff)
@@ -229,43 +258,57 @@ namespace FastPoints {
                 // Debug.Log($"[{(int)(watch.ElapsedMilliseconds / 1000)}]: Out of loop");
 
                 levelGrid = nextLevelGrid;
-                Debug.Log($"[{(int)(watch.ElapsedMilliseconds / 1000)}]: Did Level {level}");
+                Checkpoint($"Did Level {level}");
             }
 
-            Debug.Log($"[{(int)(watch.ElapsedMilliseconds / 1000)}]: Done Merging");
+           Checkpoint($"Done Merging into {chunks.Count} chunks");
 
             AABB[] chunkBBox = bbox.Subdivide(chunkGridSize);
+
+            // Checkpoint($"Subdivided into {chunkBBox.Length} bbox");
 
             // Create lookup table
             int[] lut = new int[chunkGridSize * chunkGridSize * chunkGridSize];
             for (int i = 0; i < chunks.Count; i++) {
+                // Checkpoint($"Processing chunk {i}");
                 Chunk chunk = chunks[i];
 
-                if (chunk.level == chunkDepth) {
-                    lut[chunk.x * chunkGridSize * chunkGridSize + chunk.y * chunkGridSize + chunk.z] = i;
-                    chunk.bbox = chunkBBox[i];
-                }
-                else {
-                    int chunkSize = (int)Mathf.Pow(2, chunkDepth-chunk.level);
-                    chunk.bbox = new AABB(
-                        chunks[
-                            chunk.x * chunkSize * chunkGridSize * chunkGridSize + 
-                            chunk.y * chunkSize * chunkGridSize + chunk.z * chunkSize
-                        ].bbox.Min, 
-                        chunks[
-                            ((chunk.x+1) * chunkSize - 1) * chunkGridSize * chunkGridSize + 
-                            ((chunk.y+1) * chunkSize - 1) * chunkGridSize +
-                            ((chunk.z+1) * chunkSize - 1)
-                        ].bbox.Max
-                    );
-                    for (int x = chunk.x * chunkSize; x < (chunk.x + 1) * chunkSize; x++)
-                        for (int y = chunk.y * chunkSize; y < (chunk.y + 1) * chunkSize; y++)
-                            for (int z = chunk.z * chunkSize; z < (chunk.z + 1) * chunkSize; z++)
-                                lut[x * chunkGridSize * chunkGridSize + y * chunkGridSize + z] = i;
+                try {
+
+                    if (chunk.level == chunkDepth) {
+                        // Checkpoint($"Handling leaf");
+                        int chunkIdx = chunk.x * chunkGridSize * chunkGridSize + chunk.y * chunkGridSize + chunk.z;
+                        lut[chunkIdx] = i;
+                        chunk.bbox = chunkBBox[i];
+                    }
+                    else {
+                        // Checkpoint($"Handling merged");
+                        int chunkSize = (int)Mathf.Pow(2, chunkDepth-chunk.level);
+                        chunk.bbox = new AABB(
+                            chunkBBox[
+                                chunk.x * chunkSize * chunkGridSize * chunkGridSize + 
+                                chunk.y * chunkSize * chunkGridSize + chunk.z * chunkSize
+                            ].Min, 
+                            chunkBBox[
+                                ((chunk.x+1) * chunkSize - 1) * chunkGridSize * chunkGridSize + 
+                                ((chunk.y+1) * chunkSize - 1) * chunkGridSize +
+                                ((chunk.z+1) * chunkSize - 1)
+                            ].Max
+                        );
+                        // Checkpoint($"Made bbox, now writing {chunkSize * chunkSize * chunkSize} lut entries");
+                        for (int x = chunk.x * chunkSize; x < (chunk.x + 1) * chunkSize; x++)
+                            for (int y = chunk.y * chunkSize; y < (chunk.y + 1) * chunkSize; y++)
+                                for (int z = chunk.z * chunkSize; z < (chunk.z + 1) * chunkSize; z++) 
+                                    lut[x * chunkGridSize * chunkGridSize + y * chunkGridSize + z] = i;
+                        // Checkpoint("Wrote lut");
+                    }
+                    // Checkpoint($"Processed chunk {i}");
+                } catch (Exception e) {
+                    throw e;
                 }
             }
 
-            Debug.Log($"[{(int)(watch.ElapsedMilliseconds / 1000)}]: Done LUT");
+            Checkpoint($"Done LUT");
 
             /* if (doTests) {
                 uint gridCount = 0;
@@ -279,16 +322,27 @@ namespace FastPoints {
             }*/
 
             // Create chunk files
+            Directory.CreateDirectory($"{dirPath}");
             Directory.CreateDirectory($"{dirPath}/tmp");
 
+            long bufferSize = 60;
+
             FileStream[] chunkStreams = new FileStream[chunks.Count];
+            // (int, byte[])[] chunkBuffers = new (int, byte[])[chunks.Count];
             (int, Point[])[] chunkBuffers = new (int, Point[])[chunks.Count];
+
 
             for (int i = 0; i < chunks.Count; i++) {
                 Chunk chunk = chunks[i];
-                chunk.path = $"{dirPath}/tmp/chunk_{chunk.x}_{chunk.y}_{chunk.z}_l{chunk.level}";
+                if (chunk.size == 0)
+                    continue;
+
+                chunk.path = $"{dirPath}/tmp/chunk_{chunk.x}_{chunk.y}_{chunk.z}_l{chunk.level}.bin";
                 chunkStreams[i] = File.Create(chunk.path);
-                chunkBuffers[i] = (0, new Point[10]);
+                chunkStreams[i].SetLength(chunk.size * 15);
+                // Debug.Log($"Intial file length {i}: {new FileInfo(chunk.path).Length}");
+                // chunkBuffers[i] = (0, new byte[bufferSize]);
+                chunkBuffers[i] = (0, new Point[bufferSize]);
             }
 
             // Distribute points
@@ -303,7 +357,6 @@ namespace FastPoints {
             // Start writing
             Task writeChunksTask = Task.Run(() => {
                 while (pointsWritten < data.PointCount) {
-                    Debug.Log("Writing points");
                     (Point[] batch, uint[] indices) tup;
                     while (!sortedBatches.TryDequeue(out tup)) {}
                         // Debug.Log("Waiting on batch to write");
@@ -311,29 +364,52 @@ namespace FastPoints {
                     Debug.Log($"Writing batch of length {tup.batch.Length}");
 
                     for (int i = 0; i < tup.batch.Length; i++) {
-                        Debug.Log($"Buffered point {i+1}/{tup.batch.Length}, chunkIdx {lut[tup.indices[i]]}");
+                        // if (i > 0)
+                        //     Debug.Log($"Checking: now idx of chunk {lut[tup.indices[i-1]]} is {chunkBuffers[lut[tup.indices[i-1]]].Item1}");
+                        // Debug.Log($"Buffered point {i+1}/{tup.batch.Length}, chunkIdx {lut[tup.indices[i]]}");
+                        Point pt = tup.batch[i];
                         int chunkIdx = lut[tup.indices[i]];
-                        Debug.Log("Adding point to buffer");
-                        (int idx, Point[] buffer) bufferTup = chunkBuffers[chunkIdx];
-                        Debug.Log("Got buffer");
-                        bufferTup.buffer[bufferTup.idx] = tup.batch[i];
-                        Debug.Log("Added point");
-                        bufferTup.idx++;
-                        Debug.Log("Incremented idx");
-                        if (bufferTup.idx == 10) {   // Flush when ten points queued
-                            Debug.Log("Flushing");
-                            chunkStreams[chunkIdx].Write(Point.ToBytes(chunkBuffers[chunkIdx].Item2));
+
+                        chunkBuffers[chunkIdx].Item2[chunkBuffers[chunkIdx].Item1] = pt;
+                        chunkBuffers[chunkIdx].Item1++;
+
+                        if (chunkBuffers[chunkIdx].Item1 == bufferSize) {
+                            _ = chunkStreams[chunkIdx].WriteAsync(Point.ToBytes(chunkBuffers[chunkIdx].Item2));
                             chunkBuffers[chunkIdx].Item1 = 0;
-                            Debug.Log("Flushed");
                         }
+
+                        // Debug.Log("Checking buffer");
+                        /* if (chunkBuffers[chunkIdx].Item1 + 15 >= bufferSize) {
+                            byte[] ptBytes = pt.ToBytes();
+                            int diff = (int)bufferSize - chunkBuffers[chunkIdx].Item1;
+                            // Debug.Log("Filling buffer");
+                            for (int j = 0; j < diff; j++)
+                                chunkBuffers[chunkIdx].Item2[chunkBuffers[chunkIdx].Item1+j] = ptBytes[j];
+
+                            // Debug.Log("Writing buffer");
+
+                            chunkStreams[chunkIdx].Write(chunkBuffers[chunkIdx].Item2);
+                            chunkBuffers[chunkIdx].Item1 = 15 - (int)diff;
+                            // Debug.Log("Refilling buffer");
+                            for (int j = 0; j < 15 - diff; j++)
+                                chunkBuffers[chunkIdx].Item2[j] = ptBytes[diff+j];
+                            Debug.Log($"Flushed chunk {chunkIdx}");
+                        } else {
+                            // Debug.Log("Not flushing");
+                            pt.ToBytes(chunkBuffers[chunkIdx].Item2, chunkBuffers[chunkIdx].Item1);
+                            // Debug.Log("To bytes done");
+                            chunkBuffers[chunkIdx].Item1 += 15;
+                        } */
+                        // else
+                            // Debug.Log($"Not flushing yet, chunk {chunkIdx} has buffer idx of {chunkBuffers[lut[tup.indices[i]]].Item1}");
                     }
 
                     pointsWritten += tup.batch.Length;
-                    Debug.Log($"[{(int)(watch.ElapsedMilliseconds / 1000)}]: {pointsWritten} points written");
+                    Checkpoint($"{pointsWritten} points written");
                 }
 
                 // Flush all
-                for (int i = 0; i < chunks.Count; i++) {
+                /* for (int i = 0; i < chunks.Count; i++) {
                     if (chunkBuffers[i].Item1 > 0) {
                         Point[] truncatedStream = new Point[chunkBuffers[i].Item1];
                         for (int j = 0; j < truncatedStream.Length; j++)
@@ -342,7 +418,7 @@ namespace FastPoints {
                         chunkStreams[i].Write(Point.ToBytes(truncatedStream));
                         chunkBuffers[i].Item1 = 0;
                     }
-                }
+                } */
             });
 
             Debug.Log($"[{(int)(watch.ElapsedMilliseconds / 1000)}]: Started writing");
@@ -389,6 +465,12 @@ namespace FastPoints {
             Debug.Log($"[{(int)(watch.ElapsedMilliseconds / 1000)}]: Done sorting");
 
             while (pointsWritten < data.PointCount) {}
+
+            // Debug.Log("Checking chunk files");
+            // for (int i = 0; i < chunks.Count; i++) {
+            //     if (chunks[i].size * 15 != chunkStreams[i].Length)
+            //         Debug.LogError($"Chunk {chunks[i].x}, {chunks[i].y}, {chunks[i].z}, l{chunks[i].level} expected {chunks[i].size * 15} bytes, got {chunkStreams[i].Length}");
+            // }
 
             Debug.Log($"[{(int)(watch.ElapsedMilliseconds / 1000)}]: Done writing");
 
@@ -492,6 +574,11 @@ namespace FastPoints {
             while (!actionCompleted)
                 Thread.Sleep(5);
         }
+
+        void Checkpoint(string msg) {
+            Debug.Log($"[{watch.Elapsed.ToString(@"mm\:ss\:fff")} ({watch.Elapsed.Subtract(checkpoint).ToString(@"mm\:ss\:fff")} since last checkpoint)]: {msg}");
+            checkpoint = watch.Elapsed;
+        }
     }
 
     struct BuildTreeParams {
@@ -517,19 +604,21 @@ namespace FastPoints {
     }
 
     struct Chunk {
+        public uint size;
         public AABB bbox;
         public string path;
         public int level;
         public int x;
         public int y;
         public int z;
-        public Chunk(int x, int y, int z, int level) {
+        public Chunk(int x, int y, int z, int level, uint size) {
             this.x = x;
             this.y = y;
             this.z = z;
             this.level = level;
             this.bbox = new AABB(new Vector3(1,1,1), new Vector3(0,0,0));
             this.path = null;
+            this.size = size;
         }
     }
 }

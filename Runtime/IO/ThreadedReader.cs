@@ -13,31 +13,38 @@ namespace FastPoints {
     public class ThreadedReader {
         string path;
         ConcurrentQueue<byte[]> queue;
-        int maxLength = 150;
+        static int maxLength = 150;
         int batchSize;
         int offset;
         int round;
         public bool IsRunning { get { return activeThreads > 0; } }
 
         (ReadThreadParams p, Thread t)[] readThreads;
-        int threadCount = 10;
+        int threadCount;
         int activeThreads;
 
-        public ThreadedReader(string path, int batchSize, ConcurrentQueue<byte[]> queue, int offset=0, int round=0) {
+        Stopwatch watch;
+
+        public ThreadedReader(string path, int batchSize, ConcurrentQueue<byte[]> queue, int offset=0, int round=0, int threadCount=10) {
             this.path = path;
             this.batchSize = batchSize;
             this.queue = queue;
             this.offset = offset;
             this.round = round;
+            this.threadCount = threadCount;
+
+            watch = new Stopwatch();
 
             readThreads = new (ReadThreadParams, Thread)[threadCount];
+
+            string outputStr = $"Created ThreadedReader with {threadCount} threads\n";
 
             uint fileLength = (uint)(new FileInfo(path).Length);
             uint threadSize = fileLength / (uint)threadCount;
             if (round != 0)
                 threadSize -= threadSize % (uint)round;
 
-            Action closeCallback = () => { Interlocked.Add(ref activeThreads, -1); };
+            Action closeCallback = () => { int remainingThreads = Interlocked.Add(ref activeThreads, -1); if (remainingThreads == 0) { watch.Stop(); Debug.Log($"Total reading time: {watch.ElapsedMilliseconds}"); } };
 
             uint currOffset = (uint)offset;
 
@@ -46,6 +53,8 @@ namespace FastPoints {
                     new ReadThreadParams(path, currOffset, threadSize, batchSize, queue, closeCallback),
                     new Thread(new ParameterizedThreadStart(ThreadedReader.ReadThread))
                 );
+
+                outputStr += $"\tCreated thread {i} at offset {currOffset} with size {threadSize}\n";
                 currOffset += threadSize;
             }
 
@@ -53,11 +62,17 @@ namespace FastPoints {
                 new ReadThreadParams(path, currOffset, fileLength - currOffset, batchSize, queue, closeCallback),
                 new Thread(new ParameterizedThreadStart(ThreadedReader.ReadThread))
             );
+
+            outputStr += $"\tCreated thread {threadCount-1} at offset {currOffset} with size {fileLength-currOffset}\n";
+
+            // Debug.Log(outputStr);
         }
 
         public bool Start() {
             if (activeThreads > 0)
                 return false;
+
+            watch.Start();
 
             for (int i = 0; i < threadCount; i++) {
                 readThreads[i].Item2.Start(readThreads[i].Item1);
@@ -77,16 +92,42 @@ namespace FastPoints {
             FileStream fs = File.Open(tp.filePath, FileMode.Open, FileAccess.Read, FileShare.Read);
             fs.Seek(tp.offset, SeekOrigin.Begin);
 
-            byte[] bytes = new byte[tp.batchSize];
+            uint startPos = (uint)fs.Position;
+            uint endPos;
 
             for (int i = 0; i < tp.count / tp.batchSize; i++) {
+                while (queue.Count > maxLength)
+                    Thread.Sleep(5);
+
+                byte[] bytes = new byte[tp.batchSize];
                 fs.Read(bytes);
+                endPos = (uint)fs.Position;
+                //Debug.Log($"Read batch from {startPos} to {endPos}");
+                
                 queue.Enqueue(bytes);
+
+                //Debug.Log("Enqueued bytes");
+
+                //Point[] points = Point.ToPoints(bytes);
+                //int c = 0;
+                //int c2 = 0;
+                //foreach (Point p in points)
+                //{
+                //    if (p.pos.x > 11)
+                //        c++;
+                //    if (p.pos.x < -11)
+                //        c2++;
+                //}
+                //if (c > 0 || c2 > 0)
+                //    Debug.Log($"Range {startPos}, {endPos} contains {c} big points, {c2} small points");
+                startPos = endPos;
             }
 
-            bytes = new byte[tp.count % tp.batchSize];
-            fs.Read(bytes);
-            queue.Enqueue(bytes);
+            byte[] lastBytes = new byte[tp.count % tp.batchSize];
+            fs.Read(lastBytes);
+            endPos = (uint)fs.Position;
+            //Debug.Log($"Read batch from {startPos} to {endPos}");
+            queue.Enqueue(lastBytes);
 
             fs.Close();
             tp.closeCallback();

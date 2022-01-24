@@ -44,7 +44,23 @@ namespace FastPoints {
             };
         }
 
-        public static void ToBytes(Point[] src, byte[] target) {
+        public void ToBytes(byte[] target, int offset = 0) {
+            // Debug.Log("New tobytes");
+            byte[] x_bytes = BitConverter.GetBytes(pos.x);
+            byte[] y_bytes = BitConverter.GetBytes(pos.y);
+            byte[] z_bytes = BitConverter.GetBytes(pos.z);
+
+            
+            target[offset] = x_bytes[0]; target[offset+1] = x_bytes[1]; target[offset+2] = x_bytes[2]; target[offset+3] = x_bytes[3];
+            target[offset+4] = y_bytes[0]; target[offset+5] = y_bytes[1]; target[offset+6] = y_bytes[2]; target[offset+7] = y_bytes[3];
+            target[offset+8] = z_bytes[0]; target[offset+9] = z_bytes[1]; target[offset+10] = z_bytes[2]; target[offset+11] = z_bytes[3];
+            target[offset+12] = Convert.ToByte((int)(col.r * 255.0f));
+            target[offset+13] = Convert.ToByte((int)(col.g * 255.0f));
+            target[offset+14] = Convert.ToByte((int)(col.b * 255.0f));
+            // Debug.Log("new tobytes done");
+        }
+
+        public static void ToBytes(Point[] src, byte[] target, int offset = 0) {
             if (target.Length != src.Length * 15)
                 throw new Exception("Bytes array must be 15 times length of points array");
 
@@ -57,12 +73,12 @@ namespace FastPoints {
                 byte[] y_bytes = BitConverter.GetBytes(pt.pos.y);
                 byte[] z_bytes = BitConverter.GetBytes(pt.pos.z);
 
-                target[b] = x_bytes[0]; target[b+1] = x_bytes[1]; target[b+2] = x_bytes[2]; target[b+3] = x_bytes[3];
-                target[b+4] = y_bytes[0]; target[b+5] = y_bytes[1]; target[b+6] = y_bytes[2]; target[b+7] = y_bytes[3];
-                target[b+8] = z_bytes[0]; target[b+9] = z_bytes[1]; target[b+10] = z_bytes[2]; target[b+11] = z_bytes[3];
-                target[b+12] = Convert.ToByte((int)(pt.col.r * 255.0f));
-                target[b+13] = Convert.ToByte((int)(pt.col.g * 255.0f));
-                target[b+14] = Convert.ToByte((int)(pt.col.b * 255.0f));
+                target[offset+b] = x_bytes[0]; target[offset+b+1] = x_bytes[1]; target[offset+b+2] = x_bytes[2]; target[offset+b+3] = x_bytes[3];
+                target[offset+b+4] = y_bytes[0]; target[offset+b+5] = y_bytes[1]; target[offset+b+6] = y_bytes[2]; target[offset+b+7] = y_bytes[3];
+                target[offset+b+8] = z_bytes[0]; target[offset+b+9] = z_bytes[1]; target[offset+b+10] = z_bytes[2]; target[offset+b+11] = z_bytes[3];
+                target[offset+b+12] = Convert.ToByte((int)(pt.col.r * 255.0f));
+                target[offset+b+13] = Convert.ToByte((int)(pt.col.g * 255.0f));
+                target[offset+b+14] = Convert.ToByte((int)(pt.col.b * 255.0f));
             }
         }
         
