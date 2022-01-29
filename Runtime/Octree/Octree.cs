@@ -474,97 +474,193 @@ namespace FastPoints {
 
             Debug.Log($"[{(int)(watch.ElapsedMilliseconds / 1000)}]: Done writing");
 
-            watch.Stop();
-            // Subsample chunks
+            foreach (FileStream fs in chunkStreams)
+                fs.Close();
 
-            /* ThreadedWriter tw = new ThreadedWriter($"{dirPath}/octree.bin");
-            tw.Start();
+            string treePath = $"{dirPath}/octree.dat";
+            string metaPath = $"{dirPath}/meta.dat";
+            File.Create(treePath).Close();
+            File.Create(metaPath).Close();
 
-            for (int i = 0; i < chunks.Count; i++) {
-                Point[] chunk = Point.ToPoints(File.ReadAllBytes(chunks[i].path));
-                BuildOctree(chunk, chunks[i].bbox, 2);  // Go two layers at a time to get shallow tree
+            QueuedWriter treeQW = new QueuedWriter(treePath);
+            QueuedWriter metaQW = new QueuedWriter(metaPath, chunks.Count * 4);   // Leave room at front for one uint pointer per chunk
+            
+            int parallelChunkCount = 2; // Number of chunks to do in parallel
+
+            uint[] chunkOffsets = new uint[chunks.Count];   // Offsets of each chunk into meta.dat
+
+            for (int i = 0; i < chunks.Length; i += parallelChunkCount) {
+                Task<Node>[] buildTasks = new Task<Node>[parallelChunkCount];
+                for (int j = 0; j < parallelChunkCount; j++) {
+                    buildTasks[j] = BuildLocalOctree(chunks[i+j]);
+                }
+
+                Task<uint>[] writeTasks = new Task<uint>[parallelChunkCount];
+                for (int j = 0; j < parallelChunkCount; j++) {
+                    int t = Task.WaitAny(buildTasks);
+                    writeTasks[t] = WriteLocalOctree(buildTasks[t].Result, treeQW, metaQW);
+                }
+                for (int j = 0; j < parallelChunkCount; j++) {
+                    int c = Task.WaitAny(writeTasks);
+                    metaQW.Enqueue(BitConverter.ToBytes(writeTasks[c].Result), (i+c) * 4);
+                }
             }
 
-            tw.Stop(); */
+            watch.Stop();
         }
 
-        /* Node BuildLocalOctree(Point[] points, AABB bbox, int layers) {
-            int maxNodeSize = 2000000;
-            int totalNodeCount = (int)Mathf.Pow(8, layers);
-            bool actionComplete = false;
+        async Task<Node> BuildLocalOctree(Chunk c) {
+            FileStream fs = File.Open(c.path);
+            byte[] bytes = new byte[c.size * 15];
+            fs.Read(bytes);
+            Point[] points = Point.ToPoints(bytes);
+            Task t = BuildLocalOctree(points, c.bbox, root);
+            await t;
+            return t.Result;
+        }
 
-            uint[] nodeGrid = new uint[(int)Mathf.Pow(8, layers)];
-            uint[] nodeIndices = new uint[points.Length];
+        // Look into using single point array to avoid unnecessary reallocation
+        async Task<Node> BuildLocalOctree(Point[] points, AABB bbox) {
 
-            unityActions.Enqueue(() => {
-                ComputeBuffer pointBuffer = new ComputeBuffer(batchSize, 15);
+            // Local octree parameters
+            int subsampleCount = 100000;    // Subsample 100000 points per inner node
+            int sparseNodeCutoff = 3000000;
+            int nodeCountAxis = (int)Mathf.Pow(2, treeDepth);
+            int nodeCountTotal = nodeCountAxis * nodeCountAxis * nodeCountAxis;
+
+            // Action inputs
+            int threadBudget = Mathf.CeilToInt(batchSize / 4096f);
+            float[] minPoint = new float[] { bbox.MinPoint.x-1E-5f, bbox.MinPoint.y-1E-5f, bbox.MinPoint.z-1E-5f };
+            float[] maxPoint = new float[] { bbox.MaxPoint.x+1E-5f, bbox.MaxPoint.y+1E-5f, bbox.MaxPoint.z+1E-5f };
+
+            // Action outputs
+            uint[] nodeCounts;
+            uint[] nodeStarts;
+            Point[] sortedPoints;
+
+            // Maybe separate into two executeaction calls?
+            await ExecuteAction(() => {
+                // Initialize shader
+
+                computeShader.SetInt("_BatchSize", c.size);
+                computeShader.SetInt("_ThreadBudget", threadBudget);
+                computeShader.SetFloats("_MinPoint", minPoint);
+                computeShader.SetFloats("_MaxPoint", maxPoint);
+
+                ComputeBuffer pointBuffer = new ComputeBuffer(c.size, Point.size);
                 pointBuffer.SetData(points);
 
-                ComputeBuffer nodeGridBuffer = new ComputeBuffer(totalNodeCount, sizeof(UInt32));
-                int threadBudget = Mathf.CeilToInt(points.Length / 4096f);
+                // Count shader
 
-                ComputeShader sortedBuffer = new ComputeBuffer(points.Length, sizeof(UInt32));
+                ComputeBuffer countBuffer = new ComputeBuffer(nodeCountTotal, sizeof(UInt32));
 
-                int sortHandle = computeShader.FindKernel("SortPoints");
                 int countHandle = computeShader.FindKernel("CountPoints");
+                computeShader.SetBuffer(countHandle, "_Points", pointBuffer);
+                computeShader.SetBuffer(countHandle, "_Counts", countBuffer);
 
-                computeShader.SetFloats("_MinPoint", new float[] { bbox.Min.x, bbox.Min.y, bbox.Min.z });
-                computeShader.SetFloats("_MaxPoint", new float[] { bbox.Max.x, bbox.Max.y, bbox.Max.z });
-                computeShader.SetInt("_ChunkCount", totalNodeCount);
-                computeShader.SetInt("_ThreadCount", threadBudget);
-                computeShader.SetInt("_BatchSize", points.Length);
+                computeShader.Dispatch(countHandle, 64, 1, 1);
 
-                computeShader.SetBuffer(sortHandle, "_Points", pointBuffer);
-                computeShader.SetBuffer(sortHandle, "_ChunkIndices", sortedBuffer);
+                // Create start idx from counts - maybe do on octree thread?
+                countBuffer.GetData(nodeCounts);
+
+                nodeStarts = new uint[nodeCountTotal];
+                nodeStarts[0] = 0;
+                for (int i = 1; i < nodeStarts.Length; i++)
+                    nodeStarts[i] = nodeStarts[i-1] + nodeCounts[i-1];
+
+                // Sort shader
+
+                ComputeBuffer sortedBuffer = new ComputeBuffer(c.size, Point.size);
+                ComputeBuffer startBuffer = new ComputeBuffer(nodeCountTotal, sizeof(UInt32));
+                startBuffer.SetData(nodeStarts);
+                ComputeBuffer offsetBuffer = new ComputeBuffer(nodeCountTotal, sizeof(UInt32));
+                uint[] chunkOffsets = new uint[nodeCountTotal];   // Initialize to 0s?
+                offsetBuffer.SetData(chunkOffsets);
+
+                int sortHandle = computeShader.FindKernel("SortLinear");  // Sort points into array
+                computeShader.SetBuffer(sortHandle, "_SortedPoints", sortedBuffer); // Must output adjacent nodes in order
+                computeShader.SetBuffer(sortHandle, "_ChunkStarts", startBuffer);
+                computeShader.SetBuffer(sortHandle, "_ChunkOffsets", nodeOffsets);
 
                 computeShader.Dispatch(sortHandle, 64, 1, 1);
 
-                pointBuffer.Release();
+                sortedBuffer.GetData(sortedPoints);
 
-                nodeGridBuffer.GetData(nodeGrid);
-                nodeGridBuffer.Release();
+                // Subsample shader eventually
 
-                sortedBuffer.GetData(nodeIndices);
+                // int subsampleHandle = computeShader.FindKernel("SubsamplePoints");
+                // computeShader.SetBuffer(sortHandle, "_SortedPoints", sortedBuffer);
+                // computeShader.SetBuffer(sortHandle, "_Counts", countBuffer);
+                // computeShader.SetInt("_SubsampleCount", subsampleCount);
+
+                // int i = treeDepth;
+                // for (i; i > 4; i--) {   // GPU subsampling up to cutoff
+
+                // }
+
+                // Clean up
                 sortedBuffer.Release();
-
-                actionComplete = true;
+                batchBuffer.Release();
+                startBuffer.Release();
+                offsetBuffer.Release();
+                countBuffer.Release();
+                pointBuffer.Release();
             });
 
-            // Create leaf nodes
-
-            List<Point>[] sorted = new List<Point>[totalNodeCount];
-            for (int i = 0; i < totalNodeCount; i++)
-                sorted[i] = new List<Point>();
-
-            while (!actionComplete)
-                Thread.Sleep(300);
-
-            for (int i = 0; i < points.Length; i++)
-                sorted[nodeIdx].Add(points[i]);
-
-            Node[] nodes = new Node[totalNodeCount];
-            AABB[] nodeBBox = bbox.Subdivide((int)Mathf.Pow(2, layers));
-
-            for (int i = 0; i < totalNodeCount; i++)
-                nodes[i] = 
-                    sorted[nodeIdx].Count > maxNodeSize ? 
-                    BuildLocalOctree(sorted[nodeIdx].ToArray(), nodeBBox[i], layers) : 
-                    new Node(sorted[nodeIdx].ToArray());
-
-            // Construct octree structure
-            Node[] prevLayer = nodes;
-            for (int l = layers-1; l > 0; l++) {
-                Node[] nextLayer = new Node[(int)Mathf.Pow(8, l)];
-                for (int n = 0; n < nextLayer.Length; n++) {
-                    Node node = new Node(null, true);
-                    for (int i = 0; i < 8; i++)
-                        node.children[i] = prevLayer[n * 8 + i];
-                    
+            // Recursively build tree
+            Node[] currLayer = new Node[nodeCountTotal];
+            AABB[] subdivisions = AABB.Subdivide(nodeCountAxis);
+            List<Task> recursiveCalls = new List<Task>();;
+            for (int i = 0; i < nodeCountTotal; i++) {
+                Point[] nodePoints = new Point[nodeCounts[i]];
+                for (int j = 0; j < nodeCounts[i]; j++) {
+                    nodePoints[j] = sortedPoints[nodeStarts[i]+j];
                 }
-                prevLayer = nextLayer;
+                if (nodeCounts[i] > sparseNodeCutoff) {  // Maximum size for single node
+                    Node node;
+                    recursiveCalls.Add(BuildLocalOctree(nodePoints, subdivisions[i], node).ContinueWith(() => { leafLayer[i] = node; }));
+                } else 
+                    leafLayer[i] = new Node(nodePoints, subdivisions[i]);
+            }
+            Task.WaitAll(recursiveCalls.ToArray());
+
+            int maxLevel = -1;
+            foreach (Node n in currLayer)
+                maxLevel = n.level > maxLevel ? n.level : maxLevel;
+            // foreach (Node n in currLayer)
+            //     n.SetLevel(maxLevel);
+
+            // Populate inner nodes
+            for (int i = treeDepth-2; i >= 0; i--) {
+                int layerSize = Mathf.Pow(8, i);
+                Node[] nextLayer = new Node[layerSize];
+                for (int j = 0; j < layerSize; j++) {
+                    nextLayer[j] = new Node(new Node[] {        // No allocation would probably provide speedup
+                            currLayer[j*8], currLayer[j*8+1], currLayer[j*8+2], currLayer[j*8+3], 
+                            currLayer[j*8+4], currLayer[j*8+5], currLayer[j*8+6], currLayer[j*8+7], 
+                        }, subsampleCount
+                    );
+                }
+                currLayer = nextLayer;
             }
 
-        } */
+            return currLayer[0];
+        }
+
+        async Task<uint> WriteLocalOctree(Node root, QueuedWriter treeQW, QueuedWriter metaQW) {
+
+            List<NodeReference> hierarchy = new List<NodeReference>();
+
+            await root.PopulateHierarchy(hierarchy, treeQW);
+
+            byte[] hierarchyBytes = new byte[hierarchy.Count * NodeReference.size];
+            for (int i = 0; i < hierarchy.Count; i++)
+                hierarchy[i].ToBytes(hierarchyBytes, i * NodeReference.size);
+
+            Task<uint> wt = metaQW.Enqueue(hierarchyBytes);
+            await wt;
+            return wt.Result;
+        }
 
         async Task ExecuteAction(Action a) {
             bool actionCompleted = false;
@@ -587,19 +683,6 @@ namespace FastPoints {
         public BuildTreeParams(Octree tree, PointCloudData data) {
             this.tree = tree;
             this.data = data;
-        }
-    }
-
-    struct Node {
-        public Point[] points;
-        public Node[] children;
-
-        public Node(Point[] points, bool hasChildren = false) {
-            this.points = points;
-            if (hasChildren)
-                children = new Node[8];
-            else
-                children = null;
         }
     }
 

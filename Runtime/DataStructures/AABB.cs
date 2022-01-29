@@ -1,7 +1,12 @@
 using UnityEngine;
 
+using System.Runtime.InteropServices;
+
+
+
 namespace FastPoints {
     // axis-aligned bounding box
+    [Serializable]
     public struct AABB {
         public Vector3 Min;
         public Vector3 Max;
@@ -9,6 +14,20 @@ namespace FastPoints {
         public AABB(Vector3 Min, Vector3 Max) {
             this.Min = Min;
             this.Max = Max;
+        }
+
+        public AABB(byte[] bytes, int startIdx=0) {
+            Min = new Vector3(
+                BitConverter.ToSingle(bytes, startIdx+0),
+                BitConverter.ToSingle(bytes, startIdx+4),
+                BitConverter.ToSingle(bytes, startIdx+8)
+            );
+
+            Max = new Vector3(
+                BitConverter.ToSingle(bytes, startIdx+12),
+                BitConverter.ToSingle(bytes, startIdx+16),
+                BitConverter.ToSingle(bytes, startIdx+20)
+            );
         }
 
         public AABB[] Subdivide(int count) {
@@ -47,6 +66,25 @@ namespace FastPoints {
                 Min.y <= pos.y && pos.y <= Max.y &&
                 Min.z <= pos.z && pos.z <= Max.z
             );
+        }
+
+        public void ToBytes() {
+            byte[] minXBytes = BitConverter.GetBytes(Min.x);
+            byte[] minYBytes = BitConverter.GetBytes(Min.y);
+            byte[] minZBytes = BitConverter.GetBytes(Min.z);
+            byte[] maxXBytes = BitConverter.GetBytes(Max.x);
+            byte[] maxYBytes = BitConverter.GetBytes(Max.y);
+            byte[] maxZBytes = BitConverter.GetBytes(Max.z);
+
+            return new byte[] {
+                minXBytes[0], minXBytes[1], minXBytes[2], minXBytes[3],
+                minYBytes[0], minYBytes[1], minYBytes[2], minYBytes[3],
+                minZBytes[0], minZBytes[1], minZBytes[2], minZBytes[3],
+                maxXBytes[0], maxXBytes[1], maxXBytes[2], maxXBytes[3],
+                maxYBytes[0], maxYBytes[1], maxYBytes[2], maxYBytes[3],
+                maxZBytes[0], maxZBytes[1], maxZBytes[2], maxZBytes[3],
+            };
+            
         }
     }
 }

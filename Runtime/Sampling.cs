@@ -14,11 +14,23 @@ namespace FastPoints {
             System.Random rand = new System.Random();
 
             Point[] result = new Point[sampleCount];
+            RandomSample(source, target);
+            return result;
+        }
 
-            for (int i = 0; i < sampleCount; i++) {
-                int ridx = rand.Next(source.Length);
+        // Writes directly to specified region of target 
+        public static Point[] RandomSample(Point[] source, Point[] target, int sStartIdx=0, int sEndIdx=-1, int tStartIdx=0, int tEndIdx=-1) {
+            if (sEndIdx == -1)
+                sEndIdx = source.Length;
+            if (tEndIdx == -1)
+                tEndIdx = target.Length;
+
+            System.Random rand = new System.Random();
+
+            for (int i = 0; i < tEndIdx-tStartIdx; i++) {
+                int ridx = rand.Next(sStartIdx, sEndIdx);
                 try {
-                    result[i] = source[ridx];
+                    target[tStartIdx+i] = source[ridx];
                 } catch {
                     Debug.Log($"Error on index {i}, ridx {ridx}, source length {source.Length}");
                 }
