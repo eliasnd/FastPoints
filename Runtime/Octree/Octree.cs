@@ -483,13 +483,16 @@ namespace FastPoints {
             File.Create(metaPath).Close();
 
             QueuedWriter treeQW = new QueuedWriter(treePath);
-            QueuedWriter metaQW = new QueuedWriter(metaPath, chunks.Count * 4);   // Leave room at front for one uint pointer per chunk
+            QueuedWriter metaQW = new QueuedWriter(metaPath);   // Leave room at front for one uint pointer per chunk
+
+            treeQW.Start();
+            metaQW.Start((uint)(chunks.Count * 4));
             
             int parallelChunkCount = 2; // Number of chunks to do in parallel
 
             uint[] chunkOffsets = new uint[chunks.Count];   // Offsets of each chunk into meta.dat
 
-            for (int i = 0; i < chunks.Length; i += parallelChunkCount) {
+            for (int i = 0; i < chunks.Count; i += parallelChunkCount) {
                 Task<Node>[] buildTasks = new Task<Node>[parallelChunkCount];
                 for (int j = 0; j < parallelChunkCount; j++) {
                     buildTasks[j] = BuildLocalOctree(chunks[i+j]);
@@ -502,7 +505,7 @@ namespace FastPoints {
                 }
                 for (int j = 0; j < parallelChunkCount; j++) {
                     int c = Task.WaitAny(writeTasks);
-                    metaQW.Enqueue(BitConverter.ToBytes(writeTasks[c].Result), (i+c) * 4);
+                    metaQW.Enqueue(BitConverter.GetBytes(writeTasks[c].Result), (uint)((i+c) * 4));
                 }
             }
 
@@ -510,11 +513,11 @@ namespace FastPoints {
         }
 
         async Task<Node> BuildLocalOctree(Chunk c) {
-            FileStream fs = File.Open(c.path);
+            FileStream fs = File.Open(c.path, FileMode.Open);
             byte[] bytes = new byte[c.size * 15];
             fs.Read(bytes);
             Point[] points = Point.ToPoints(bytes);
-            Task t = BuildLocalOctree(points, c.bbox, root);
+            Task<Node> t = BuildLocalOctree(points, c.bbox);
             await t;
             return t.Result;
         }
@@ -530,24 +533,24 @@ namespace FastPoints {
 
             // Action inputs
             int threadBudget = Mathf.CeilToInt(batchSize / 4096f);
-            float[] minPoint = new float[] { bbox.MinPoint.x-1E-5f, bbox.MinPoint.y-1E-5f, bbox.MinPoint.z-1E-5f };
-            float[] maxPoint = new float[] { bbox.MaxPoint.x+1E-5f, bbox.MaxPoint.y+1E-5f, bbox.MaxPoint.z+1E-5f };
+            float[] minPoint = new float[] { bbox.Min.x-1E-5f, bbox.Min.y-1E-5f, bbox.Min.z-1E-5f };
+            float[] maxPoint = new float[] { bbox.Max.x+1E-5f, bbox.Max.y+1E-5f, bbox.Max.z+1E-5f };
 
             // Action outputs
-            uint[] nodeCounts;
-            uint[] nodeStarts;
-            Point[] sortedPoints;
+            uint[] nodeCounts = new uint[nodeCountTotal];
+            uint[] nodeStarts = new uint[nodeCountTotal];
+            Point[] sortedPoints = new Point[points.Length];
 
             // Maybe separate into two executeaction calls?
             await ExecuteAction(() => {
                 // Initialize shader
 
-                computeShader.SetInt("_BatchSize", c.size);
+                computeShader.SetInt("_BatchSize", points.Length);
                 computeShader.SetInt("_ThreadBudget", threadBudget);
                 computeShader.SetFloats("_MinPoint", minPoint);
                 computeShader.SetFloats("_MaxPoint", maxPoint);
 
-                ComputeBuffer pointBuffer = new ComputeBuffer(c.size, Point.size);
+                ComputeBuffer pointBuffer = new ComputeBuffer(points.Length, Point.size);
                 pointBuffer.SetData(points);
 
                 // Count shader
@@ -563,14 +566,13 @@ namespace FastPoints {
                 // Create start idx from counts - maybe do on octree thread?
                 countBuffer.GetData(nodeCounts);
 
-                nodeStarts = new uint[nodeCountTotal];
                 nodeStarts[0] = 0;
                 for (int i = 1; i < nodeStarts.Length; i++)
                     nodeStarts[i] = nodeStarts[i-1] + nodeCounts[i-1];
 
                 // Sort shader
 
-                ComputeBuffer sortedBuffer = new ComputeBuffer(c.size, Point.size);
+                ComputeBuffer sortedBuffer = new ComputeBuffer(points.Length, Point.size);
                 ComputeBuffer startBuffer = new ComputeBuffer(nodeCountTotal, sizeof(UInt32));
                 startBuffer.SetData(nodeStarts);
                 ComputeBuffer offsetBuffer = new ComputeBuffer(nodeCountTotal, sizeof(UInt32));
@@ -580,7 +582,7 @@ namespace FastPoints {
                 int sortHandle = computeShader.FindKernel("SortLinear");  // Sort points into array
                 computeShader.SetBuffer(sortHandle, "_SortedPoints", sortedBuffer); // Must output adjacent nodes in order
                 computeShader.SetBuffer(sortHandle, "_ChunkStarts", startBuffer);
-                computeShader.SetBuffer(sortHandle, "_ChunkOffsets", nodeOffsets);
+                computeShader.SetBuffer(sortHandle, "_ChunkOffsets", offsetBuffer);
 
                 computeShader.Dispatch(sortHandle, 64, 1, 1);
 
@@ -600,7 +602,7 @@ namespace FastPoints {
 
                 // Clean up
                 sortedBuffer.Release();
-                batchBuffer.Release();
+                pointBuffer.Release();
                 startBuffer.Release();
                 offsetBuffer.Release();
                 countBuffer.Release();
@@ -609,30 +611,38 @@ namespace FastPoints {
 
             // Recursively build tree
             Node[] currLayer = new Node[nodeCountTotal];
-            AABB[] subdivisions = AABB.Subdivide(nodeCountAxis);
-            List<Task> recursiveCalls = new List<Task>();;
+            AABB[] subdivisions = bbox.Subdivide(nodeCountAxis);
+            Task<Node>[] recursiveCalls = new Task<Node>[nodeCountTotal];
             for (int i = 0; i < nodeCountTotal; i++) {
                 Point[] nodePoints = new Point[nodeCounts[i]];
                 for (int j = 0; j < nodeCounts[i]; j++) {
                     nodePoints[j] = sortedPoints[nodeStarts[i]+j];
                 }
                 if (nodeCounts[i] > sparseNodeCutoff) {  // Maximum size for single node
-                    Node node;
-                    recursiveCalls.Add(BuildLocalOctree(nodePoints, subdivisions[i], node).ContinueWith(() => { leafLayer[i] = node; }));
-                } else 
-                    leafLayer[i] = new Node(nodePoints, subdivisions[i]);
+                    recursiveCalls[i] = BuildLocalOctree(nodePoints, subdivisions[i]);
+                }
+                else {
+                    currLayer[i] = new Node(nodePoints, subdivisions[i]);
+                    recursiveCalls[i] = null;
+                }
             }
-            Task.WaitAll(recursiveCalls.ToArray());
 
-            int maxLevel = -1;
-            foreach (Node n in currLayer)
-                maxLevel = n.level > maxLevel ? n.level : maxLevel;
+
+            Task.WaitAll(recursiveCalls);
+            for (int i = 0; i < nodeCountTotal; i++) {
+                if (recursiveCalls[i] != null)
+                    currLayer[i] = recursiveCalls[i].Result;
+            }
+
+            //int maxLevel = -1;
+            //foreach (Node n in currLayer)
+            //    maxLevel = n.level > maxLevel ? n.level : maxLevel;
             // foreach (Node n in currLayer)
             //     n.SetLevel(maxLevel);
 
             // Populate inner nodes
             for (int i = treeDepth-2; i >= 0; i--) {
-                int layerSize = Mathf.Pow(8, i);
+                int layerSize = (int)Mathf.Pow(8, i);
                 Node[] nextLayer = new Node[layerSize];
                 for (int j = 0; j < layerSize; j++) {
                     nextLayer[j] = new Node(new Node[] {        // No allocation would probably provide speedup
@@ -655,7 +665,7 @@ namespace FastPoints {
 
             byte[] hierarchyBytes = new byte[hierarchy.Count * NodeReference.size];
             for (int i = 0; i < hierarchy.Count; i++)
-                hierarchy[i].ToBytes(hierarchyBytes, i * NodeReference.size);
+                hierarchy[i].ToBytes(hierarchyBytes, (int)(i * NodeReference.size));
 
             Task<uint> wt = metaQW.Enqueue(hierarchyBytes);
             await wt;

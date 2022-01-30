@@ -1,14 +1,15 @@
 using UnityEngine;
 
+using System;
 using System.Runtime.InteropServices;
+using System.Threading.Tasks;
+using System.Collections.Generic;
 
 namespace FastPoints {
     public struct Node {
         public Point[] points;
         public Node[] children;
         public AABB bbox;        
-
-        public Node() {}
 
         public Node(Point[] points, AABB bbox) {
             this.points = points;
@@ -29,19 +30,18 @@ namespace FastPoints {
 
             points = new Point[pointCount];
             for (int i = 0; i < 8; i++) // Get same number of points from all children
-                Sampling.RandomSample(children[i].points, points, tStartIdx=i*(pointCount/8), tEndIdx=(i+1)*(pointCount/8));
-            this.points = points;
+                Sampling.RandomSample(children[i].points, points, tStartIdx:i*(pointCount/8), tEndIdx:(i+1)*(pointCount/8));
         }
 
-        public int DescendentCount() {
-            if (descendentCount == -1) {
-                descendentCount = 0;
-                if (children != null)
-                    foreach (Node c in children)
-                        descendentCount += c.DescendentCount();
-            }
-            return descendentCount;
-        }
+        //public int DescendentCount() {
+        //    if (descendentCount == -1) {
+        //        descendentCount = 0;
+        //        if (children != null)
+        //            foreach (Node c in children)
+        //                descendentCount += c.DescendentCount();
+        //    }
+        //    return descendentCount;
+        //}
 
         public int CountPoints() {
             if (children == null)
@@ -62,7 +62,7 @@ namespace FastPoints {
             h.Add(nr);
 
             uint descendentCount = 0;
-            uint pointCount = points.Length;
+            uint pointCount = (uint)points.Length;
             uint offset;
 
             if (children != null) {
@@ -75,7 +75,7 @@ namespace FastPoints {
 
                 Task.WaitAll(cTasks);
                 for (int i = 0; i < 8; i++)
-                    descendentCount += h[descendentCount+1].descendentCount;
+                    descendentCount += h[(int)descendentCount+1].descendentCount;
             } else {
                 await wt;
                 offset = wt.Result;
@@ -86,8 +86,8 @@ namespace FastPoints {
             nr.pointCount = pointCount;
             nr.offset = offset;
 
-            if (h[idx] != nr)
-                Debug.LogError("NodeReference didn't populate properly");
+            //if (h[idx] != nr)
+            //    Debug.LogError("NodeReference didn't populate properly");
         }
     }
 
@@ -100,13 +100,6 @@ namespace FastPoints {
         public uint pointCount;
         public uint offset;
 
-        public NodeReference() {
-            this.descendentCount = 0;
-            this.pointCount = 0;
-            this.offset = 0;
-            this.bbox = null;
-        }
-
         public NodeReference(uint pointCount, uint offset, uint descendentCount, AABB bbox) {
             this.descendentCount = descendentCount;
             this.pointCount = pointCount;
@@ -115,9 +108,9 @@ namespace FastPoints {
         }
 
         public NodeReference(byte[] bytes) {
-            this.descendentCount = BitConverter.GetUInt32(bytes, 0);
-            this.pointCount = BitConverter.GetUInt32(bytes, 4);
-            this.offset = BitConverter.GetUInt32(bytes, 8);
+            this.descendentCount = BitConverter.ToUInt32(bytes, 0);
+            this.pointCount = BitConverter.ToUInt32(bytes, 4);
+            this.offset = BitConverter.ToUInt32(bytes, 8);
             this.bbox = new AABB(bytes, 12);
         }
 

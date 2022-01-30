@@ -11,15 +11,13 @@ namespace FastPoints {
 
         // Note: if more samples than points in source, repeats points
         public static Point[] RandomSample(Point[] source, int sampleCount) {
-            System.Random rand = new System.Random();
-
             Point[] result = new Point[sampleCount];
-            RandomSample(source, target);
+            RandomSample(source, result);
             return result;
         }
 
         // Writes directly to specified region of target 
-        public static Point[] RandomSample(Point[] source, Point[] target, int sStartIdx=0, int sEndIdx=-1, int tStartIdx=0, int tEndIdx=-1) {
+        public static void RandomSample(Point[] source, Point[] target, int sStartIdx=0, int sEndIdx=-1, int tStartIdx=0, int tEndIdx=-1) {
             if (sEndIdx == -1)
                 sEndIdx = source.Length;
             if (tEndIdx == -1)
@@ -36,8 +34,6 @@ namespace FastPoints {
                 }
                 
             }
-
-            return result;
         }
 
         public static Point[] UniformSample(Point[] source, int sampleCount) {

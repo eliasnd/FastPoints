@@ -1,5 +1,6 @@
 using UnityEngine;
 
+using System;
 using System.Runtime.InteropServices;
 
 
@@ -68,7 +69,7 @@ namespace FastPoints {
             );
         }
 
-        public void ToBytes() {
+        public byte[] ToBytes() {
             byte[] minXBytes = BitConverter.GetBytes(Min.x);
             byte[] minYBytes = BitConverter.GetBytes(Min.y);
             byte[] minZBytes = BitConverter.GetBytes(Min.z);

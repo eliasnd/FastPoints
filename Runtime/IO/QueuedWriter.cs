@@ -1,3 +1,6 @@
+using UnityEngine;
+
+using System;
 using System.IO;
 using System.Collections.Concurrent;
 using System.Threading;
@@ -6,14 +9,14 @@ using System.Threading.Tasks;
 namespace FastPoints {
     public class QueuedWriter {
         string path;
-        ConcurrentQueue<(byte[], uint, Action)> queue;
+        ConcurrentQueue<(byte[], uint, Action<uint>)> queue;
         int maxLength = 150;
         bool running;
 
 
         public QueuedWriter(string path) {
             this.path = path;
-            queue = new ConcurrentQueue<(byte[], Action)>();
+            queue = new ConcurrentQueue<(byte[], uint, Action<uint>)>();
         }
 
         public bool Start(uint offset=0) {
@@ -24,18 +27,18 @@ namespace FastPoints {
 
             Task.Run(() => {
                 FileStream fs = File.OpenWrite(path);
-                fs.Seek(offset);
+                fs.Seek(offset, SeekOrigin.Begin);
                 while (running || queue.Count > 0) {
-                    (byte[] b, uint l, Action cb) tup;
+                    (byte[] b, uint l, Action<uint> cb) tup;
                     while (!queue.TryDequeue(out tup)) {}
                     if (tup.l == uint.MaxValue) {
-                        tup.cb(fs.Position);
+                        tup.cb((uint)fs.Position);
                         fs.Write(tup.b);
                     } else {
-                        uint oldPos = fs.Position;
-                        fs.Seek(tup.l);
+                        uint oldPos = (uint)fs.Position;
+                        fs.Seek(tup.l, SeekOrigin.Begin);
                         fs.Write(tup.b);
-                        fs.Seek(oldPos);
+                        fs.Seek(oldPos, SeekOrigin.Begin);
                     }
                 }
             });
@@ -53,17 +56,17 @@ namespace FastPoints {
         }
 
         public async Task<uint> Enqueue(byte[] bytes, uint pos=uint.MaxValue) {
-            if (!writing)
+            if (!running)
                 Debug.LogError("QueuedWriter must be running!");
 
-            uint ptr;
+            uint ptr = 0;
 
             await Task.Run(() => {
                 while (queue.Count > maxLength)
                     Thread.Sleep(50);
 
                 ptr = uint.MaxValue;
-                queue.Enqueue(bytes, pos, (uint p) => { ptr = p; });
+                queue.Enqueue((bytes, pos, (uint p) => { ptr = p; }));
 
                 while (ptr == uint.MaxValue)
                     Thread.Sleep(300);
