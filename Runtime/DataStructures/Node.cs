@@ -9,12 +9,14 @@ namespace FastPoints {
     public struct Node {
         public Point[] points;
         public Node[] children;
-        public AABB bbox;        
+        public AABB bbox;    
+        public int descendentCount; // Total number of descendents, populated from children    
 
         public Node(Point[] points, AABB bbox) {
             this.points = points;
             this.bbox = bbox;
             this.children = null;
+            this.descendentCount = 0;
         }
 
         public Node(Node[] children, int pointCount) {
@@ -29,8 +31,17 @@ namespace FastPoints {
             bbox = new AABB(minPoint, maxPoint);
 
             points = new Point[pointCount];
-            for (int i = 0; i < 8; i++) // Get same number of points from all children
-                Sampling.RandomSample(children[i].points, points, tStartIdx:i*(pointCount/8), tEndIdx:(i+1)*(pointCount/8));
+            List<Node> nonEmptyChildren = new List<Node>();
+            foreach (Node c in children)
+                if (c.points.Length > 0)
+                    nonEmptyChildren.Add(c);
+
+            descendentCount = 0;
+            for (int i = 0; i < nonEmptyChildren.Count; i++)
+            { // Get same number of points from all children
+                descendentCount += nonEmptyChildren[i].descendentCount + 1;
+                Sampling.RandomSample(nonEmptyChildren[i].points, points, tStartIdx: i * (pointCount / nonEmptyChildren.Count), tEndIdx: (i + 1) * (pointCount / nonEmptyChildren.Count));
+            }
         }
 
         //public int DescendentCount() {
@@ -55,39 +66,81 @@ namespace FastPoints {
 
         // Recursively populate hierarchy with nodeSize, descendentCount, descendentPointCount
         public async Task PopulateHierarchy(List<NodeReference> h, QueuedWriter w) {
-            Task<uint> wt = w.Enqueue(Point.ToBytes(points));
+            Point[] points = this.points;
+            Node[] children = this.children;
+            AABB bbox = this.bbox;
 
-            NodeReference nr = new NodeReference();
-            int idx = h.Count;
-            h.Add(nr);
+            await Task.Run(async () => {
+                Task<uint> wt = w.Enqueue(Point.ToBytes(points));
 
-            uint descendentCount = 0;
-            uint pointCount = (uint)points.Length;
-            uint offset;
+                NodeReference nr = new NodeReference();
+                int idx = h.Count;
+                h.Add(nr);
 
-            if (children != null) {
-                Task[] cTasks = new Task[8];
-                for (int i = 0; i < 8; i++)
-                    cTasks[i] = children[i].PopulateHierarchy(h, w);
+                uint descendentCount = 0;
+                uint pointCount = (uint)points.Length;
+                uint offset;
 
-                await wt;
-                offset = wt.Result;
+                if (children != null) {
+                    Task[] cTasks = new Task[8];
+                    for (int i = 0; i < 8; i++)
+                        cTasks[i] = children[i].PopulateHierarchy(h, w);
 
-                Task.WaitAll(cTasks);
-                for (int i = 0; i < 8; i++)
-                    descendentCount += h[(int)descendentCount+1].descendentCount;
-            } else {
-                await wt;
-                offset = wt.Result;
-            }
+                    // Parallel.Invoke(
+                    //     () => children[0].PopulateHierarchy(h, w),
+                    //     () => children[1].PopulateHierarchy(h, w),
+                    //     () => children[2].PopulateHierarchy(h, w),
+                    //     () => children[3].PopulateHierarchy(h, w),
+                    //     () => children[4].PopulateHierarchy(h, w),
+                    //     () => children[5].PopulateHierarchy(h, w),
+                    //     () => children[6].PopulateHierarchy(h, w),
+                    //     () => children[7].PopulateHierarchy(h, w)
+                    // );
 
-            nr.bbox = bbox;
-            nr.descendentCount = descendentCount;
-            nr.pointCount = pointCount;
-            nr.offset = offset;
+                    await wt;
+                    offset = wt.Result;
+
+                    // Task.WaitAll(cTasks);
+                    for (int i = 0; i < 8; i++)
+                        descendentCount += h[(int)descendentCount+1].descendentCount+1;
+                } else {
+                    await wt;
+                    offset = wt.Result;
+                }
+
+                nr.bbox = bbox;
+                nr.descendentCount = descendentCount;
+                nr.pointCount = pointCount;
+                nr.offset = offset;
+            });
+            
 
             //if (h[idx] != nr)
             //    Debug.LogError("NodeReference didn't populate properly");
+        }
+
+        public async Task StartWriting(Task<NodeReference>[] hierarchy, QueuedWriter qw, int idx=0) {
+            Task<NodeReference> rt = GetReference(qw);
+            hierarchy[idx] = rt;
+            if (children != null) {
+                int hOffset = 1;
+                for (int i = 0; i < 8; i++) {
+                    children[i].StartWriting(hierarchy, qw, idx+hOffset);
+                    hOffset += children[i].descendentCount+1; 
+                }
+            }
+        }
+
+        public async Task<NodeReference> GetReference(QueuedWriter qw) {
+            Point[] points = this.points;
+            int descendentCount = this.descendentCount;
+            AABB bbox = this.bbox;
+
+            NodeReference nr;
+
+            Task<uint> wt = qw.Enqueue(Point.ToBytes(points));
+            await wt;
+            return new NodeReference((uint)points.Length, wt.Result, (uint)descendentCount, bbox);
         }
     }
 
@@ -130,6 +183,12 @@ namespace FastPoints {
             target[startIdx+24] = bBytes[12]; target[startIdx+25] = bBytes[13]; target[startIdx+26] = bBytes[14]; target[startIdx+27] = bBytes[15];
             target[startIdx+28] = bBytes[16]; target[startIdx+29] = bBytes[17]; target[startIdx+30] = bBytes[18]; target[startIdx+31] = bBytes[19];
             target[startIdx+32] = bBytes[20]; target[startIdx+33] = bBytes[21]; target[startIdx+34] = bBytes[22]; target[startIdx+35] = bBytes[23];
+        }
+
+        public static async Task<NodeReference> GetNodeReferenceAsync(Point[] points, uint descendentCount, AABB bbox, QueuedWriter qw) {
+            Task<uint> wt = qw.Enqueue(Point.ToBytes(points));
+            await wt;
+            return new NodeReference(points.Length, wt.Result, descendentCount, bbox);
         }
     }
 }

@@ -38,14 +38,19 @@ namespace FastPoints {
             float maxX, maxY, maxZ;
             float xStep, yStep, zStep;
 
-            minX = minY = minZ = 0;
+            xStep = Mathf.Lerp(Min.x, Max.x, 1f/count) - Min.x;
+            yStep = Mathf.Lerp(Min.y, Max.y, 1f/count) - Min.y;
+            zStep = Mathf.Lerp(Min.z, Max.z, 1f/count) - Min.z;
 
-            xStep = maxX = Mathf.Lerp(Min.x, Max.x, 1f/count);
-            yStep = maxY = Mathf.Lerp(Min.y, Max.y, 1f/count);
-            zStep = maxZ = Mathf.Lerp(Min.z, Max.z, 1f/count);
+            minX = Min.x;
+            maxX = Min.x + xStep;
 
             for (int x = 0; x < count; x++) {
+                minY = Min.y;
+                maxY = Min.y + yStep;
                 for (int y = 0; y < count; y++) {
+                    minZ = Min.z;
+                    maxZ = Min.z + zStep;
                     for (int z = 0; z < count; z++) {
                         result[count * count * x + count * y + z] = new AABB(new Vector3(minX, minY, minZ), new Vector3(maxX, maxY, maxZ));
                         minZ = maxZ;

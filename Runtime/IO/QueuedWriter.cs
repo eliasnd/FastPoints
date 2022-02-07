@@ -28,10 +28,42 @@ namespace FastPoints {
             Task.Run(() => {
                 FileStream fs = File.OpenWrite(path);
                 fs.Seek(offset, SeekOrigin.Begin);
+
+                int bufferSize = 4096; 
+                int bufferIdx = 0;
+                byte[] buffer = new byte[bufferSize];
+
                 while (running || queue.Count > 0) {
                     (byte[] b, uint l, Action<uint> cb) tup;
-                    while (!queue.TryDequeue(out tup)) {}
-                    if (tup.l == uint.MaxValue) {
+                    while (!queue.TryDequeue(out tup))
+                        Thread.Sleep(50);
+
+                    if (tup.l == uint.MaxValue) {   // If no offset specified, use buffer
+                        /* if (tup.b.Length > bufferSize) { // Should be rare, but possible
+                            byte[] tempBuffer = new byte[bufferIdx];
+                            for (int i = 0; i < bufferIdx; i++)
+                                tempBuffer[i] = buffer[i];
+                            fs.Write(tempBuffer);
+                            bufferIdx = 0;
+
+                            tup.cb((uint)fs.Position);
+                            fs.Write(tup.b);
+                        } else if (bufferIdx + tup.b.Length >= bufferSize) {
+                            // Flush buffer
+                            fs.Write(buffer);
+                            tup.cb((uint)fs.Position);
+
+                            // Populate buffer
+                            for (int i = 0; i < tup.b.Length; i++)
+                                buffer[i] = tup.b[i];
+                            bufferIdx = tup.b.Length;
+                        } else {
+                            tup.cb((uint)(fs.Position + bufferIdx));
+                            for (int i = 0; i < tup.b.Length; i++)
+                                buffer[bufferIdx+i] = tup.b[i];
+                            bufferIdx += tup.b.Length;
+                        } */
+
                         tup.cb((uint)fs.Position);
                         fs.Write(tup.b);
                     } else {
@@ -40,6 +72,7 @@ namespace FastPoints {
                         fs.Write(tup.b);
                         fs.Seek(oldPos, SeekOrigin.Begin);
                     }
+                    // Debug.Log($"Wrote {tup.b.Length} bytes");
                 }
             });
 
@@ -69,7 +102,7 @@ namespace FastPoints {
                 queue.Enqueue((bytes, pos, (uint p) => { ptr = p; }));
 
                 while (ptr == uint.MaxValue)
-                    Thread.Sleep(300);
+                    Thread.Sleep(50);
             });
 
             return ptr;
