@@ -5,107 +5,125 @@ using System.IO;
 using System.Collections.Concurrent;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Diagnostics;
+
+using Debug = UnityEngine.Debug;
 
 namespace FastPoints {
     public class QueuedWriter {
-        string path;
-        ConcurrentQueue<(byte[], uint, Action<uint>)> queue;
-        int maxLength = 150;
-        bool running;
+        ConcurrentQueue<(byte[], uint)> queue;
+        public Stream stream;
+        WriterThreadParams p;
+        Thread writeThread;
 
+        object enqueueLock = new object();
+        uint currOffset;
+
+        public uint QueueSize
+        {
+            get
+            {
+                lock (p.queueSizeLock)
+                {
+                    return p.queueSize;
+                }
+            }
+        }
 
         public QueuedWriter(string path) {
-            this.path = path;
-            queue = new ConcurrentQueue<(byte[], uint, Action<uint>)>();
+            stream = File.OpenWrite(path);
         }
 
-        public bool Start(uint offset=0) {
-            if (running)
-                return false;
+        public QueuedWriter(Stream stream) {
+            this.stream = stream;
+        }
 
-            running = true;
+        public void Start(uint offset=0)
+        {
+            p = new WriterThreadParams();
+            p.offset = offset;
+            p.stream = stream;
+            p.stopSignal = false;
+            p.queue = new ConcurrentQueue<(byte[], uint)>();
+            p.queueSizeLock = new object();
+            p.queueSize = 0;
 
-            Task.Run(() => {
-                FileStream fs = File.OpenWrite(path);
-                fs.Seek(offset, SeekOrigin.Begin);
+            writeThread = new Thread(new ParameterizedThreadStart(RunWriter));
+            writeThread.Start(p);
+        }
 
-                int bufferSize = 4096; 
-                int bufferIdx = 0;
-                byte[] buffer = new byte[bufferSize];
+        static void RunWriter(object obj) {
+            WriterThreadParams p = (WriterThreadParams)obj;
 
-                while (running || queue.Count > 0) {
-                    (byte[] b, uint l, Action<uint> cb) tup;
-                    while (!queue.TryDequeue(out tup))
-                        Thread.Sleep(50);
+            p.stream.Seek(p.offset, SeekOrigin.Begin);
 
-                    if (tup.l == uint.MaxValue) {   // If no offset specified, use buffer
-                        /* if (tup.b.Length > bufferSize) { // Should be rare, but possible
-                            byte[] tempBuffer = new byte[bufferIdx];
-                            for (int i = 0; i < bufferIdx; i++)
-                                tempBuffer[i] = buffer[i];
-                            fs.Write(tempBuffer);
-                            bufferIdx = 0;
+            while (!p.stopSignal || p.queue.Count > 0) {
+                (byte[] b, uint l) tup;
+                while (!p.queue.TryDequeue(out tup)) { }
 
-                            tup.cb((uint)fs.Position);
-                            fs.Write(tup.b);
-                        } else if (bufferIdx + tup.b.Length >= bufferSize) {
-                            // Flush buffer
-                            fs.Write(buffer);
-                            tup.cb((uint)fs.Position);
-
-                            // Populate buffer
-                            for (int i = 0; i < tup.b.Length; i++)
-                                buffer[i] = tup.b[i];
-                            bufferIdx = tup.b.Length;
-                        } else {
-                            tup.cb((uint)(fs.Position + bufferIdx));
-                            for (int i = 0; i < tup.b.Length; i++)
-                                buffer[bufferIdx+i] = tup.b[i];
-                            bufferIdx += tup.b.Length;
-                        } */
-
-                        tup.cb((uint)fs.Position);
-                        fs.Write(tup.b);
-                    } else {
-                        uint oldPos = (uint)fs.Position;
-                        fs.Seek(tup.l, SeekOrigin.Begin);
-                        fs.Write(tup.b);
-                        fs.Seek(oldPos, SeekOrigin.Begin);
-                    }
-                    // Debug.Log($"Wrote {tup.b.Length} bytes");
+                lock (p.queueSizeLock)
+                {
+                    p.queueSize -= (uint)tup.b.Length;
                 }
-            });
 
-            return true;
+                if (tup.l == uint.MaxValue)
+                    p.stream.Write(tup.b);
+                else
+                {
+                    uint oldPos = (uint)p.stream.Position;
+                    p.stream.Seek(tup.l, SeekOrigin.Begin);
+                    p.stream.Write(tup.b);
+                    p.stream.Seek(oldPos, SeekOrigin.Begin);
+                }
+            }
         }
 
-        public async Task Stop() {
-            await Task.Run(() => {
-                if (!running)
-                    return;
+        public void Stop() {
+            if (!writeThread.IsAlive)
+                Debug.LogError("QueuedWriter must be running to stop!");
 
-                running = false;
-            });
+            p.stopSignal = true;
         }
 
-        public async Task<uint> Enqueue(byte[] bytes, uint pos=uint.MaxValue) {
-            if (!running)
-                Debug.LogError("QueuedWriter must be running!");
+        public uint Enqueue(byte[] bytes, uint pos = uint.MaxValue)
+        {
+            if (!writeThread.IsAlive)
+                Debug.LogError("QueuedWriter must be running to enqueue!");
 
-            uint ptr = 0;
+            while (true)
+            {
+                lock (p.queueSizeLock)
+                {
+                    if (p.queueSize < 1024 * 1024 * 100)
+                    {
+                        p.queueSize += (uint)bytes.Length;
+                        break;
+                    }
+                }
+                Thread.Sleep(20);
+            }
+            
 
-            await Task.Run(() => {
-                while (queue.Count > maxLength)
-                    Thread.Sleep(50);
+            lock (enqueueLock) {
+                queue.Enqueue((bytes, pos));
 
-                ptr = uint.MaxValue;
-                queue.Enqueue((bytes, pos, (uint p) => { ptr = p; }));
+                if (pos != uint.MaxValue) {
+                    uint ptr = currOffset;
+                    currOffset += (uint)bytes.Length;
+                    return ptr;
+                } else
+                    return pos;
+            }
+        }
+    }
 
-                while (ptr == uint.MaxValue)
-                    Thread.Sleep(50);
-            });
-
-            return ptr;
-        }        
+    struct WriterThreadParams
+    {
+        public ConcurrentQueue<(byte[], uint)> queue;
+        public object queueSizeLock;
+        public uint queueSize;
+        public Stream stream;
+        public uint offset;
+        public bool stopSignal;
     }
 }

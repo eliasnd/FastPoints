@@ -22,7 +22,7 @@ namespace FastPoints {
         AABB bbox;
 
         // Construction params
-        int batchSize = 1000000;  // Size of batches for reading and running shader
+        int batchSize = 3000000;  // Size of batches for reading and running shader
 
         bool doTests = true;
 
@@ -42,31 +42,18 @@ namespace FastPoints {
             Checkpoint("Starting");
 
             ConcurrentQueue<Point[]> readQueue = new ConcurrentQueue<Point[]>();
-            if (data.MinPoint.x >= data.MaxPoint.x || data.MinPoint.y >= data.MaxPoint.y || data.MinPoint.z >= data.MaxPoint.z) 
-                await data.PopulateBounds();
 
             _ = data.LoadPointBatches(batchSize, readQueue);
 
-            // Debug.Log("Started task");
+            if (data.MinPoint.x >= data.MaxPoint.x || data.MinPoint.y >= data.MaxPoint.y || data.MinPoint.z >= data.MaxPoint.z) 
+                await data.PopulateBounds();
 
             int chunkDepth = 5;
             int chunkGridSize = (int)Mathf.Pow(2, chunkDepth);
-            // Debug.Log("Allocating compute buffer");
             ComputeBuffer chunkGridBuffer = null;    // Can't allocate from thread - have to trickery to get around type checker
-            // Debug.Log("Allocated compute buffer");
 
             // 4096 threads per shader pass call
             int threadBudget = Mathf.CeilToInt(batchSize / 4096f);
-
-            // Debug.Log("Waiting on bounds");
-
-            // while (data.MinPoint.x >= data.MaxPoint.x || data.MinPoint.y >= data.MaxPoint.y || data.MinPoint.z >= data.MaxPoint.z)
-                // Thread.Sleep(300);  // Block until bounds populated
-
-            // Debug.Log("Bounds populated");
-
-            Debug.Log($"Min Point: {data.MinPoint.ToString()}");
-            Debug.Log($"Max Point: {data.MaxPoint.ToString()}");
 
             float[] minPoint = new float[] { data.MinPoint.x-1E-5f, data.MinPoint.y-1E-5f, data.MinPoint.z-1E-5f };
             float[] maxPoint = new float[] { data.MaxPoint.x+1E-5f, data.MaxPoint.y+1E-5f, data.MaxPoint.z+1E-5f };
@@ -106,21 +93,9 @@ namespace FastPoints {
                 while (!readQueue.TryDequeue(out batch))
                     Thread.Sleep(5);
 
-                // foreach (Point pt in batch) {
-                //     if (pt.pos.x < data.MinPoint.x || pt.pos.y < data.MinPoint.y || pt.pos.z < data.MinPoint.z ||
-                //         pt.pos.x > data.MaxPoint.x || pt.pos.y > data.MaxPoint.y || pt.pos.z > data.MaxPoint.z)
-                //         Debug.LogError($"Point OOB: {pt.ToString()}");
-                // }
-
-                // Debug.Log("Dequeued batch");
-
                 countTasks.Add(ExecuteAction(() => {
-                    // Stopwatch watch = new Stopwatch();
-                    // watch.Start();
                     ComputeBuffer batchBuffer = new ComputeBuffer(batch.Length, Point.size);
                     batchBuffer.SetData(batch);
-
-                    // Debug.Log(batch[0].ToString());
 
                     computeShader.SetBuffer(computeShader.FindKernel("CountPoints"), "_Counts", chunkGridBuffer);
 
@@ -131,15 +106,10 @@ namespace FastPoints {
 
                     batchBuffer.Release();
                     pointsCounted += batch.Length;
-                    // watch.Stop();
-                    // Debug.Log($"Batch processed in {watch.ElapsedMilliseconds} ms");
-                    // Debug.Log($"Points counted: {pointsCounted}");
                 }));
 
                 pointsQueued += batch.Length;
             }
-
-            Checkpoint("Queued Counting");
 
             readQueue.Clear();
             data.LoadPointBatches(batchSize, readQueue);   // Start loading to get head start while merging
@@ -164,24 +134,6 @@ namespace FastPoints {
 
             // List<Chunk> chunks = new List<Chunk>();
 
-            // int sparseChunkCutoff = 10000000;    // Any chunk with more than sparseChunkCutoff points is written to disk
-
-            // uint[] levelGrid = data.chunkCounts;
-
-            // if (doTests) {
-            //     uint gridCount = 0;
-            //     for (int i = 0; i < levelGrid.Length; i++)
-            //         gridCount += levelGrid[i];
-                
-            //     if (gridCount != data.PointCount)
-            //         Debug.LogError($"Grid test failed. Total count is {gridCount}");
-            //     else
-            //         Debug.Log("Grid test passed");
-            // }
-
-
-            Checkpoint("Big Loop");
-
             for (int level = chunkDepth; level > 0; level--) {
                 int levelGridSize = (int)Mathf.Pow(levelGrid.Length, 1/3f);
 
@@ -189,16 +141,10 @@ namespace FastPoints {
 
                 uint[] nextLevelGrid = new uint[(levelGridSize/2) * (levelGridSize/2) * (levelGridSize/2)];
 
-                Checkpoint($"On Level {level}. levelGridSize is {levelGridSize}, nextLevelGrid is {levelGridSize/2}");
-
                 for (int x = 0; x < levelGridSize; x+=2) {
                     for (int y = 0; y < levelGridSize; y+=2)
                         for (int z = 0; z < levelGridSize; z+=2) {
-                            // if (level < 4)
-                            //     Checkpoint($"X: {x}, Y: {y}, Z: {z}");
                             void addChunks() {
-                                // if (level < 4)
-                                //     Checkpoint($"Adding chunks to idx {x/2}, {y/2}, {z/2}");
                                 if (levelGridIndex(x, y, z) != UInt32.MaxValue)
                                     chunks.Add(new Chunk(x, y, z, level, levelGridIndex(x, y, z))); 
                                 if (levelGridIndex(x, y, z+1) != UInt32.MaxValue)
@@ -215,15 +161,8 @@ namespace FastPoints {
                                     chunks.Add(new Chunk(x+1, y+1, z, level, levelGridIndex(x+1, y+1, z))); 
                                 if (levelGridIndex(x+1, y+1, z+1) != UInt32.MaxValue)
                                     chunks.Add(new Chunk(x+1, y+1, z+1, level, levelGridIndex(x+1, y+1, z+1)));
-                                // if (level < 4)
-                                //     Checkpoint($"Added chunks, setting nextlevelGrid of length {nextLevelGrid.Length} at idx {x/2 * (levelGridSize-1) * (levelGridSize-1) + y/2 * (levelGridSize-1) + z/2}");
                                 nextLevelGrid[x/2 * (levelGridSize/2) * (levelGridSize/2) + y/2 * (levelGridSize/2) + z/2] = UInt32.MaxValue;
-                                // if (level < 4)
-                                //     Checkpoint("Set nextlevelgrid");
                             };
-
-                            // if (level < 4)
-                            //     Checkpoint($"Got here1");
 
                             // If any chunks in cube previously added
                             if (levelGridIndex(x, y, z) == UInt32.MaxValue || levelGridIndex(x, y, z+1) == UInt32.MaxValue ||
@@ -252,16 +191,11 @@ namespace FastPoints {
                             else
                                 addChunks();
                         }
-                    // Debug.Log($"[{(int)(watch.ElapsedMilliseconds / 1000)}]: Did x {x}");
                 }
 
-                // Debug.Log($"[{(int)(watch.ElapsedMilliseconds / 1000)}]: Out of loop");
-
                 levelGrid = nextLevelGrid;
-                Checkpoint($"Did Level {level}");
             }
 
-           Checkpoint($"Done Merging into {chunks.Count} chunks");
 
             AABB[] chunkBBox = bbox.Subdivide(chunkGridSize);
 
@@ -318,7 +252,7 @@ namespace FastPoints {
 
             long bufferSize = 60;
 
-            FileStream[] chunkStreams = new FileStream[chunks.Count];
+            QueuedWriter[] chunkWriters = new QueuedWriter[chunks.Count];
             // (int, byte[])[] chunkBuffers = new (int, byte[])[chunks.Count];
             (int, Point[])[] chunkBuffers = new (int, Point[])[chunks.Count];
 
@@ -434,18 +368,18 @@ namespace FastPoints {
                 if (fs != null)
                     fs.Close();
 
-            /* string treePath = $"{dirPath}/octree.dat";
+            string treePath = $"{dirPath}/octree.dat";
             string metaPath = $"{dirPath}/meta.dat";
-            File.Create(treePath).Close();
-            File.Create(metaPath).Close();
+            // File.Create(treePath).Close();
+            // File.Create(metaPath).Close();
 
             QueuedWriter treeQW = new QueuedWriter(treePath);
             QueuedWriter metaQW = new QueuedWriter(metaPath);   // Leave room at front for one uint pointer per chunk
 
-            Debug.Log("Starting writers");
+            // Debug.Log("Starting writers");
 
             treeQW.Start();
-            metaQW.Start((uint)(chunks.Count * 4)); */
+            metaQW.Start((uint)(chunks.Count * 4));
             
             int parallelChunkCount = 4; // Number of chunks to do in parallel
 
@@ -453,34 +387,69 @@ namespace FastPoints {
 
             int activeTasks = 0;
 
+            uint maxMemoryUsage = 1024 * 1024 * 1024;    // 1 GB Ram
+            object memoryUsageLock = new object();
+            uint memoryUsage = 0;
+
             for (int i = 0; i < chunks.Count; i++) {
-                while (activeTasks >= parallelChunkCount)
-                    Thread.Sleep(300);
+                Chunk c = chunks[i];
+
+                while (true)
+                {
+                    if (memoryUsage + (c.size * Point.size) >= maxMemoryUsage)
+                        Thread.Sleep(50);
+                    else
+                    {
+                        lock (memoryUsageLock)
+                        {
+                            if (memoryUsage + (c.size * Point.size) >= maxMemoryUsage)
+                                continue;
+
+                            memoryUsage += c.size * Point.size;
+                            break;
+                        }
+                    }
+                }
 
                 Task.Run(async () => {
                     int idx = i;
-                    Debug.Log($"Building local octree for chunk {idx}");
-                    Task<Node> bt = BuildLocalOctree(chunks[idx]);
-                    await bt;
-                    Node n = bt.Result;
+                    // Debug.Log($"Building local octree for chunk {idx}");
 
-                    string treePath = $"{dirPath}/tmp/octree_{chunks[idx].x}_{chunks[idx].y}_{chunks[idx].z}_l{chunks[idx].level}.dat";
-                    string metaPath = $"{dirPath}/tmp/meta_{chunks[idx].x}_{chunks[idx].y}_{chunks[idx].z}_l{chunks[idx].level}.dat";
-                    File.Create(treePath).Close();
-                    File.Create(metaPath).Close();
+                    // string treePath = $"{dirPath}/tmp/octree_{chunks[idx].x}_{chunks[idx].y}_{chunks[idx].z}_l{chunks[idx].level}.dat";
+                    // string metaPath = $"{dirPath}/tmp/meta_{chunks[idx].x}_{chunks[idx].y}_{chunks[idx].z}_l{chunks[idx].level}.dat";
+                    // File.Create(treePath).Close();
+                    // File.Create(metaPath).Close();
 
-                    QueuedWriter treeQW = new QueuedWriter(treePath);
-                    QueuedWriter metaQW = new QueuedWriter(metaPath); 
+                    // QueuedWriter treeQW = new QueuedWriter(treePath);
+                    // QueuedWriter metaQW = new QueuedWriter(metaPath); 
 
-                    treeQW.Start();
-                    metaQW.Start();
+                    // QueuedWriter localTreeQW = new QueuedWriter(new MemoryStream((int)(chunks[idx].size * 15)));
 
+                    // localTreeQW.Start();
                     Debug.Log($"Writing octree for chunk {idx}");
 
-                    Task<uint> wt = WriteLocalOctree(bt.Result, treeQW, metaQW);
-                    await wt;
-                    metaQW.Enqueue(BitConverter.GetBytes(wt.Result), (uint)(i * 4));
+                    Task<Node> bt = BuildLocalOctree(chunks[idx], treeQW);
+                    await bt;
+                    Node root = bt.Result;
+
+                    Debug.Log($"Chunk {idx} written to file");
+
+                    Node[] nodes = new Node[root.descendentCount+1];
+                    await root.FlattenTree(nodes);
+
+                    byte[] hierarchyBytes = new byte[nodes.Length * 36];
+                    for (int n = 0; n < nodes.Length; n++)
+                        nodes[n].ToBytes(hierarchyBytes, n*36);
+
+                    Debug.Log($"Chunk {idx} hierarchy generated");
+
+                    metaQW.Enqueue(BitConverter.GetBytes(metaQW.Enqueue(hierarchyBytes)), (uint)(idx * 4));   // Write index of chunk hierarchy to header
+
                     Debug.Log($"Finished chunk {idx}");
+                    lock (memoryUsageLock)
+                    {
+                        memoryUsage -= chunks[idx].size * Point.size;
+                    }
                     activeTasks--;
                 });
 
@@ -491,12 +460,12 @@ namespace FastPoints {
             watch.Stop();
         }
 
-        async Task<Node> BuildLocalOctree(Chunk c) {
+        async Task<Node> BuildLocalOctree(Chunk c, QueuedWriter qw) {
             FileStream fs = File.Open(c.path, FileMode.Open);
             byte[] bytes = new byte[c.size * 15];
             fs.Read(bytes);
             Point[] points = Point.ToPoints(bytes);
-            Task<Node> t = BuildLocalOctree(points, c.bbox);
+            Task<Node> t = BuildLocalOctree(points, c.bbox, qw);
             await t;
             return t.Result;
         }
@@ -534,7 +503,7 @@ namespace FastPoints {
 
                 // Count shader
 
-                ComputeBuffer countBuffer = new ComputeBuffer(nodeCountTotal, sizeof(UInt32));
+                ComputeBuffer countBuffer = new ComputeBuffer(nodeCountTotal, sizeof(uint));
 
                 int countHandle = computeShader.FindKernel("CountPoints");
                 computeShader.SetBuffer(countHandle, "_Points", pointBuffer);
@@ -552,9 +521,9 @@ namespace FastPoints {
                 // Sort shader
 
                 ComputeBuffer sortedBuffer = new ComputeBuffer(points.Length, Point.size);
-                ComputeBuffer startBuffer = new ComputeBuffer(nodeCountTotal, sizeof(UInt32));
+                ComputeBuffer startBuffer = new ComputeBuffer(nodeCountTotal, sizeof(uint));
                 startBuffer.SetData(nodeStarts);
-                ComputeBuffer offsetBuffer = new ComputeBuffer(nodeCountTotal, sizeof(UInt32));
+                ComputeBuffer offsetBuffer = new ComputeBuffer(nodeCountTotal, sizeof(uint));
                 uint[] chunkOffsets = new uint[nodeCountTotal];   // Initialize to 0s?
                 offsetBuffer.SetData(chunkOffsets);
 
@@ -590,10 +559,13 @@ namespace FastPoints {
             });
 
             // Recursively build tree
-            Node[] currLayer = new Node[nodeCountTotal];
             AABB[] subdivisions = bbox.Subdivide(nodeCountAxis);
-            int[] recursiveCallIndices = new int[nodeCountTotal];
+
+            Node[] currLayer = new Node[nodeCountTotal];
+
             List<Task<Node>> recursiveCalls = new List<Task<Node>>();
+            int[] recursiveCallIndices = new int[nodeCountTotal];
+
             for (int i = 0; i < nodeCountTotal; i++) {
                 Point[] nodePoints = new Point[nodeCounts[i]];
                 for (int j = 0; j < nodeCounts[i]; j++) {
@@ -601,11 +573,13 @@ namespace FastPoints {
                 }
                 if (nodeCounts[i] > sparseNodeCutoff) {  // Maximum size for single node
                     recursiveCallIndices[i] = recursiveCalls.Count;
-                    recursiveCalls.Add(BuildLocalOctree(nodePoints, subdivisions[i]));
+                    recursiveCalls.Add(BuildLocalOctree(nodePoints, subdivisions[i], qw));
                 }
                 else {
                     currLayer[i] = new Node(nodePoints, subdivisions[i]);
-                    currLayer[i].descendentCount = 0;
+                    if (nodeCounts[i] > 0)
+                        currLayer[i].WriteNode(qw);
+
                     recursiveCallIndices[i] = -1;
                 }
             }
@@ -638,23 +612,20 @@ namespace FastPoints {
                                 levelGridIndex(x*2, y*2+1, z*2).points.Length == 0 && levelGridIndex(x*2, y*2+1, z*2+1).points.Length == 0 && 
                                 levelGridIndex(x*2+1, y*2, z*2).points.Length == 0 && levelGridIndex(x*2+1, y*2, z*2+1).points.Length == 0 && 
                                 levelGridIndex(x*2+1, y*2+1, z*2).points.Length == 0 && levelGridIndex(x*2+1, y*2+1, z*2+1).points.Length == 0) {
-                                nextLayer[x*nextLayerSize*nextLayerSize+y*nextLayerSize+z] = new Node(new Point[0], new AABB(
+                                Node n = new Node(new Point[0], new AABB(
                                     levelGridIndex(x*2,y*2,z*2).bbox.Min, 
                                     levelGridIndex(x*2+1,y*2+1,z*2+1).bbox.Max
                                 ));
-                                nextLayer[x*nextLayerSize*nextLayerSize+y*nextLayerSize+z].descendentCount = 0;
+                                nextLayer[x*nextLayerSize*nextLayerSize+y*nextLayerSize+z] = n;
                             } else {
-                                nextLayer[x*nextLayerSize*nextLayerSize+y*nextLayerSize+z] = new Node(new Node[] {
+                                Node n = new Node(new Node[] {
                                     levelGridIndex(x*2, y*2, z*2), levelGridIndex(x*2, y*2, z*2+1), 
                                     levelGridIndex(x*2, y*2+1, z*2), levelGridIndex(x*2, y*2+1, z*2+1), 
                                     levelGridIndex(x*2+1, y*2, z*2), levelGridIndex(x*2+1, y*2, z*2+1), 
                                     levelGridIndex(x*2+1, y*2+1, z*2), levelGridIndex(x*2+1, y*2+1, z*2+1)
                                 }, subsampleCount);
-                                nextLayer[x*nextLayerSize*nextLayerSize+y*nextLayerSize+z].descendentCount = 8 +
-                                    levelGridIndex(x*2, y*2, z*2).descendentCount + levelGridIndex(x*2, y*2, z*2+1).descendentCount + 
-                                    levelGridIndex(x*2, y*2+1, z*2).descendentCount + levelGridIndex(x*2, y*2+1, z*2+1).descendentCount + 
-                                    levelGridIndex(x*2+1, y*2, z*2).descendentCount + levelGridIndex(x*2+1, y*2, z*2+1).descendentCount + 
-                                    levelGridIndex(x*2+1, y*2+1, z*2).descendentCount + levelGridIndex(x*2+1, y*2+1, z*2+1).descendentCount;
+                                n.WriteNode(qw);
+                                nextLayer[x*nextLayerSize*nextLayerSize+y*nextLayerSize+z] = n;
                             }
                         }
                     }
@@ -666,45 +637,6 @@ namespace FastPoints {
             }
 
             return currLayer[0];
-        }
-
-        async Task<uint> WriteLocalOctree(Node root, QueuedWriter treeQW, QueuedWriter metaQW) {
-            Debug.Log("Writing local octree");
-
-            Stopwatch w = new Stopwatch();
-            w.Start();
-
-            Task<NodeReference>[] tasks = new Task<NodeReference>[root.descendentCount+1];
-            await root.StartWriting(tasks, treeQW);
-
-            Task.WaitAll(tasks);
-
-            NodeReference[] hierarchy = new NodeReference[root.descendentCount+1];
-            for (int i = 0; i < root.descendentCount+1; i++)
-                hierarchy[i] = tasks[i].Result;
-
-            w.Stop();
-            Debug.Log($"Populated octree took {w.ElapsedMilliseconds} ms");
-
-            w.Reset();
-            w.Start();
-
-            byte[] hierarchyBytes = new byte[hierarchy.Length * NodeReference.size];
-            for (int i = 0; i < hierarchy.Length; i++)
-                hierarchy[i].ToBytes(hierarchyBytes, (int)(i * NodeReference.size));
-
-            w.Stop();
-            Debug.Log($"Hierarchy bytes took {w.ElapsedMilliseconds} ms");
-
-            w.Reset();
-            w.Start();
-
-            Task<uint> wt = metaQW.Enqueue(hierarchyBytes);
-            await wt;
-
-            w.Stop();
-            Debug.Log($"Writing took {w.ElapsedMilliseconds} ms");
-            return wt.Result;
         }
 
         async Task ExecuteAction(Action a) {

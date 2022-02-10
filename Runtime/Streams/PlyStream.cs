@@ -534,7 +534,7 @@ namespace FastPoints {
             await Task.Run(() => {
                 ConcurrentQueue<byte[]> bQueue = new ConcurrentQueue<byte[]>();
 
-                ThreadedReader tr = new ThreadedReader(path, batchSize * pointSize, bQueue, bodyOffset, pointSize, 5);
+                ThreadedReader tr = new ThreadedReader(path, batchSize * pointSize, bQueue, bodyOffset, pointSize, 10);
                 tr.Start();
 
                 int totalEnqueued = 0;
