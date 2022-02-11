@@ -1,99 +1,109 @@
+using System;
 using System.IO;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
 namespace FastPoints {
     public class ThreadedWriter {
-        string path;
-        ConcurrentQueue<(uint, byte[])> queue;
-        int maxLength = 150;
-        (ThreadParams p, Thread t)[] threads;
-        int threadCount = 100;
+        ConcurrentDictionary<string, ConcurrentBag<byte[]>> buffers;
+        Dictionary<string, int> locks;
+        (Thread, ThreadParams)[] threads;
         readonly object writingLock = new object();
-        bool writing;
-        public bool IsWriting { get { return writing; } }
+        bool stopSignal = false;
 
 
-        public ThreadedWriter(string path) {
-            this.path = path;
-            queue = new ConcurrentQueue<(uint, byte[])>();
-            threads = new (ThreadParams, Thread)[threadCount];
-            for (int i = 0; i < threadCount; i++)
-                threads[i] = (new ThreadParams(path, queue), new Thread(new ParameterizedThreadStart(ThreadedWriter.WriteThread)));
+        public ThreadedWriter(int threadCount=1) {
+            buffers = new ConcurrentDictionary<string, ConcurrentBag<byte[]>>();
+            locks = new Dictionary<string, int>();
+
+            threads = new (Thread, ThreadParams)[threadCount];
+            for (int i = 0; i < threadCount; i++) {
+                Thread t = new Thread(new ParameterizedThreadStart(WriteThread));
+                ThreadParams p = new ThreadParams(buffers, locks, false, writingLock);
+                t.Start(p);
+                threads[i] = (t, p);
+            }
         }
 
-        public bool Start() {
-            if (writing)
-                return false;
+        ~ThreadedWriter() {
+            stopSignal = true;
 
-            foreach ((ThreadParams p, Thread t) tup in threads)
-                tup.t.Start(tup.p);
+            for (int i = 0; i < threads.Length; i++)
+                threads[i].Item2.stopSignal = true;
 
-            writing = true;
-            return true;
+            for (int i = 0; i < threads.Length; i++)    // Maybe not needed?
+                threads[i].Item1.Join();
         }
 
-        public async Task Stop() {
-            await Task.Run(() => {
-                if (!writing)
-                    return;
+        public void Write(string path, byte[] bytes) {
+            if (stopSignal)
+                throw new Exception("ThreadedWriter not running!");
 
-                foreach ((ThreadParams p, Thread t) tup in threads)
-                    tup.p.writing = false;
-                    
-                writing = false;
-
-                bool threadsFinished = false;   // Wait for all threads to finish
-                while (!threadsFinished) {
-                    Thread.Sleep(300);
-                    threadsFinished = true;
-                    foreach ((ThreadParams p, Thread t) tup in threads)
-                        threadsFinished &= !tup.t.IsAlive;
-                }
-            });
-        }
-
-        public bool Write(uint idx, byte[] bytes) {
-            if (queue.Count >= maxLength)
-                return false;
-
-            queue.Enqueue((idx, bytes));
-            return true;
+            buffers.GetOrAdd(path, new ConcurrentBag<byte[]>()).Add(bytes);
         }
 
         static void WriteThread(object obj) {
             ThreadParams tp = (ThreadParams)obj;
 
-            FileStream fs = File.Open(tp.filePath, FileMode.Open, FileAccess.Write, FileShare.ReadWrite);
-            ConcurrentQueue<(uint, byte[])> queue = tp.writeQueue;
+            while (true) {
+                string path = null;
 
-            while (tp.writing || queue.Count > 0) {
-                (uint idx, byte[] bytes) tuple;
-                if (!queue.TryDequeue(out tuple)) {  // If queue empty, sleep
-                    Thread.Sleep(300);
+                
+                if (tp.stopSignal && tp.buffers.Count == 0)
+                    break;
+
+                lock (tp.writingLock) {
+                    foreach (string s in tp.buffers.Keys)
+                        if (!tp.locks.ContainsKey(s)) {
+                            path = s;
+                            tp.locks.Add(path, 1);
+                            break;
+                        }
+                }
+
+                if (path == null)  { // No unlocked buffer
+                    Thread.Sleep(100);
                     continue;
                 }
 
+                FileStream fs = File.OpenWrite(path);
+                ConcurrentBag<byte[]> buffer = tp.buffers[path];
 
-                fs.Seek(tuple.idx, SeekOrigin.Begin);
-                fs.Write(tuple.bytes);
+                // Flush buffer
+                while (buffer.Count > 0) {
+                    byte[] bytes;
+                    while (!buffer.TryTake(out bytes)) {}
+                    fs.Write(bytes);
+                }
+
+                // Clean up
+                lock (tp.writingLock) {
+                    tp.buffers.TryRemove(path, out buffer);
+                    int i;
+                    tp.locks.Remove(path, out i);
+                }
+
+                fs.Close();
+
+                Thread.Sleep(100);
             }
-
-            fs.Close();
         }
     }
 
     class ThreadParams {
 
-        public string filePath;
-        public ConcurrentQueue<(uint, byte[])> writeQueue;
-        public bool writing;
+        public object writingLock;
+        public ConcurrentDictionary<string, ConcurrentBag<byte[]>> buffers;
+        public Dictionary<string, int> locks;
+        public bool stopSignal;
 
-        public ThreadParams(string filePath, ConcurrentQueue<(uint, byte[])> writeQueue) {
-            this.filePath = filePath;
-            this.writeQueue = writeQueue;
-            writing = true;
+        public ThreadParams(ConcurrentDictionary<string, ConcurrentBag<byte[]>> buffers, Dictionary<string, int> locks, bool stopSignal, object writingLock) {
+            this.buffers = buffers;
+            this.locks = locks;
+            this.stopSignal = stopSignal;
+            this.writingLock = writingLock;
         }
     }
 }

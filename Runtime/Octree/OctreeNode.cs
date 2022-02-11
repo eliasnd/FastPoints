@@ -79,7 +79,7 @@ namespace FastPoints {
 
         // Writes points to buffer. Writes buffer to file if forcewrite = true or if buffer over given size
         // Passing forceWrite with no points will write buffer, but not add anything
-        public async Task WritePoints(Point[] points) {
+        /* public async Task WritePoints(Point[] points) {
             if (pointsWritten + points.Length > count)
                 throw new Exception($"Trying to write {points.Length} points to node with {count-pointsWritten} remaining points allocated");
 
@@ -89,7 +89,7 @@ namespace FastPoints {
                 while (!tw.Write((uint)(offset + bytesWritten), bytes)) {};
                 bytesWritten += bytes.Length;
             });
-        }
+        } */
 
         public async Task ReadPoints(Point[] target, int idx=0) {
             if (!AllPointsWritten)
@@ -114,7 +114,7 @@ namespace FastPoints {
         }
 
         // Populates points and bbox of internal node
-        public async Task PopulateInternal() {
+        /* public async Task PopulateInternal() {
             await Task.Run(async () => {
                 int nonEmptyChildren = 0;
                 foreach (OctreeNode child in children)
@@ -147,7 +147,7 @@ namespace FastPoints {
                 }
             });
             
-        }
+        } */
 
         // Traverses tree DFS and populates target array. Need to implement point budget.
         /* public void SelectPoints(Point[] target, ref int idx, Camera cam) {

@@ -17,16 +17,16 @@ namespace FastPoints {
         Thread writeThread;
 
         object enqueueLock = new object();
-        uint currOffset;
+        long currOffset;
 
-        public uint QueueSize
+        public long QueueSize
         {
             get
             {
-                lock (p.queueSizeLock)
-                {
+                // lock (p.queueSizeLock)
+                // {
                     return p.queueSize;
-                }
+                // }
             }
         }
 
@@ -41,7 +41,7 @@ namespace FastPoints {
         public void Start(uint offset=0)
         {
             p = new WriterThreadParams();
-            p.offset = offset;
+            p.offset = (long)offset;
             p.stream = stream;
             p.stopSignal = false;
             p.queue = new ConcurrentQueue<(byte[], uint)>();
@@ -61,10 +61,7 @@ namespace FastPoints {
                 (byte[] b, uint l) tup;
                 while (!p.queue.TryDequeue(out tup)) { }
 
-                lock (p.queueSizeLock)
-                {
-                    p.queueSize -= (uint)tup.b.Length;
-                }
+                Interlocked.Add(ref p.queueSize, -(long)tup.b.Length);
 
                 if (tup.l == uint.MaxValue)
                     p.stream.Write(tup.b);
@@ -75,7 +72,11 @@ namespace FastPoints {
                     p.stream.Write(tup.b);
                     p.stream.Seek(oldPos, SeekOrigin.Begin);
                 }
+
+                Thread.Sleep(100);
             }
+
+            p.stream.Close();
         }
 
         public void Stop() {
@@ -85,34 +86,22 @@ namespace FastPoints {
             p.stopSignal = true;
         }
 
-        public uint Enqueue(byte[] bytes, uint pos = uint.MaxValue)
+        public long Enqueue(byte[] bytes, uint pos = uint.MaxValue)
         {
             if (!writeThread.IsAlive)
                 Debug.LogError("QueuedWriter must be running to enqueue!");
-
-            while (true)
-            {
-                lock (p.queueSizeLock)
-                {
-                    if (p.queueSize < 1024 * 1024 * 100)
-                    {
-                        p.queueSize += (uint)bytes.Length;
-                        break;
-                    }
-                }
-                Thread.Sleep(20);
-            }
             
+            Interlocked.Add(ref p.queueSize, (long)bytes.Length);
 
             lock (enqueueLock) {
-                queue.Enqueue((bytes, pos));
+                p.queue.Enqueue((bytes, pos));
 
                 if (pos != uint.MaxValue) {
-                    uint ptr = currOffset;
-                    currOffset += (uint)bytes.Length;
+                    long ptr =currOffset;
+                    currOffset += (long)bytes.Length;
                     return ptr;
                 } else
-                    return pos;
+                    return (long)pos;
             }
         }
     }
@@ -121,9 +110,9 @@ namespace FastPoints {
     {
         public ConcurrentQueue<(byte[], uint)> queue;
         public object queueSizeLock;
-        public uint queueSize;
+        public long queueSize;
         public Stream stream;
-        public uint offset;
+        public long offset;
         public bool stopSignal;
     }
 }

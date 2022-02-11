@@ -25,6 +25,7 @@ namespace FastPoints {
         }
 
         public Node(Node[] children, int pointCount) {
+            Debug.Log("Making inner node");
             this.children = children;
             this.offset = 0;
 
@@ -35,8 +36,10 @@ namespace FastPoints {
             
             List<Node> nonEmptyChildren = new List<Node>();
             foreach (Node c in children)
-                if (c.points.Length > 0)
+                if (c.pointCount > 0)
                     nonEmptyChildren.Add(c);
+
+            // Debug.Log("Got nonEmpty Children");
 
             descendentCount = 8;
             for (int i = 0; i < nonEmptyChildren.Count; i++)
@@ -44,12 +47,16 @@ namespace FastPoints {
                 descendentCount += nonEmptyChildren[i].descendentCount;
                 Sampling.RandomSample(nonEmptyChildren[i].points, points, tStartIdx: i * (pointCount / nonEmptyChildren.Count), tEndIdx: (i + 1) * (pointCount / nonEmptyChildren.Count));
             }
+
+            // Debug.Log("Sampled nonempty children");
+
+            // Debug.Log("Made Inner Node");
         }
 
         public void WriteNode(QueuedWriter qw) {
             // Debug.Log($"Writing node with {points.Length} points");
-            offset = qw.Enqueue(Point.ToBytes(points));
-            points = null;
+            offset = (uint)qw.Enqueue(Point.ToBytes(points));
+            // points = null;
         }
 
         public void ToBytes(byte[] target, int startIdx=0) {

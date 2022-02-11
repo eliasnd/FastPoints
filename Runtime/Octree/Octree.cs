@@ -22,7 +22,7 @@ namespace FastPoints {
         AABB bbox;
 
         // Construction params
-        int batchSize = 3000000;  // Size of batches for reading and running shader
+        int batchSize = 5000000;  // Size of batches for reading and running shader
 
         bool doTests = true;
 
@@ -252,7 +252,7 @@ namespace FastPoints {
 
             long bufferSize = 60;
 
-            QueuedWriter[] chunkWriters = new QueuedWriter[chunks.Count];
+            // FileStream[] chunkStreams = new FileStream[chunks.Count];
             // (int, byte[])[] chunkBuffers = new (int, byte[])[chunks.Count];
             (int, Point[])[] chunkBuffers = new (int, Point[])[chunks.Count];
 
@@ -265,8 +265,9 @@ namespace FastPoints {
 
                 chunk.path = $"{dirPath}/tmp/chunk_{chunk.x}_{chunk.y}_{chunk.z}_l{chunk.level}.bin";
                 chunks[i] = chunk;
-                chunkStreams[i] = File.Create(chunk.path);
-                chunkStreams[i].SetLength(chunk.size * 15);
+                // chunkStreams[i] = File.Create(chunk.path);
+                // chunkStreams[i].SetLength(chunk.size * 15);
+                // chunkStreams[i] = File.OpenWrite(chunk.path);
                 // Debug.Log($"Intial file length {i}: {new FileInfo(chunk.path).Length}");
                 // chunkBuffers[i] = (0, new byte[bufferSize]);
                 chunkBuffers[i] = (0, new Point[bufferSize]);
@@ -281,6 +282,8 @@ namespace FastPoints {
             int pointsSorted = 0;
             int pointsWritten = 0;
 
+            ThreadedWriter chunkWriter = new ThreadedWriter(12);
+
             // Start writing
             Task writeChunksTask = Task.Run(() => {
                 List<Point>[] sorted = new List<Point>[chunks.Count];
@@ -292,7 +295,7 @@ namespace FastPoints {
                     while (!sortedBatches.TryDequeue(out tup)) {}
                         // Debug.Log("Waiting on batch to write");
 
-                    Debug.Log($"Writing batch of length {tup.batch.Length}");
+                    // Debug.Log($"Writing batch of length {tup.batch.Length}");
 
                     for (int i = 0; i < tup.batch.Length; i++)
                         sorted[lut[tup.indices[i]]].Add(tup.batch[i]);
@@ -302,7 +305,8 @@ namespace FastPoints {
                         if (sorted[i].Count == 0)
                             continue;
 
-                        _ = chunkStreams[i].WriteAsync(Point.ToBytes(sorted[i].ToArray()));
+                        // chunkStreams[i].WriteAsync(Point.ToBytes(sorted[i].ToArray()));
+                        chunkWriter.Write(chunks[i].path, Point.ToBytes(sorted[i].ToArray()));
                         sorted[i].Clear();
                     }
 
@@ -311,7 +315,7 @@ namespace FastPoints {
                 }
             });
 
-            Debug.Log($"[{(int)(watch.ElapsedMilliseconds / 1000)}]: Started writing");
+            Checkpoint("Started writing");
 
             // Sort points
             while (pointsQueued < data.PointCount) {
@@ -342,17 +346,19 @@ namespace FastPoints {
 
                     sortedBatches.Enqueue((batch, chunkIndices));
                     pointsSorted += batch.Length;
-                    Debug.Log($"[{(int)(watch.ElapsedMilliseconds / 1000)}]: {pointsSorted} points sorted, {sortedBatches.Count} batches queued");
+                    // Debug.Log($"[{(int)(watch.ElapsedMilliseconds / 1000)}]: {pointsSorted} points sorted, {sortedBatches.Count} batches queued");
                 });
 
                 pointsQueued += batch.Length;
             }
 
-            Debug.Log($"[{(int)(watch.ElapsedMilliseconds / 1000)}]: Queued sorting");
+            // Debug.Log($"[{(int)(watch.ElapsedMilliseconds / 1000)}]: Queued sorting");
 
             while (pointsSorted < data.PointCount) {}
+
+            Checkpoint("Done sorting");
             
-            Debug.Log($"[{(int)(watch.ElapsedMilliseconds / 1000)}]: Done sorting");
+            // Debug.Log($"[{(int)(watch.ElapsedMilliseconds / 1000)}]: Done sorting");
 
             while (pointsWritten < data.PointCount) {}
 
@@ -362,11 +368,13 @@ namespace FastPoints {
             //         Debug.LogError($"Chunk {chunks[i].x}, {chunks[i].y}, {chunks[i].z}, l{chunks[i].level} expected {chunks[i].size * 15} bytes, got {chunkStreams[i].Length}");
             // }
 
-            Debug.Log($"[{(int)(watch.ElapsedMilliseconds / 1000)}]: Done writing");
+            Checkpoint("Done writing");
 
-            foreach (FileStream fs in chunkStreams)
-                if (fs != null)
-                    fs.Close();
+            // Debug.Log($"[{(int)(watch.ElapsedMilliseconds / 1000)}]: Done writing");
+
+            // for (int i = 0; i < chunkStreams.Length; i++)
+            //     if (chunkStreams[i] != null)
+            //         chunkStreams[i].Close();
 
             string treePath = $"{dirPath}/octree.dat";
             string metaPath = $"{dirPath}/meta.dat";
@@ -391,9 +399,10 @@ namespace FastPoints {
             object memoryUsageLock = new object();
             uint memoryUsage = 0;
 
-            for (int i = 0; i < chunks.Count; i++) {
-                Chunk c = chunks[i];
-
+            int tmp = 0;
+            foreach (Chunk c in chunks) {
+                int idx = tmp;
+                tmp++;
                 while (true)
                 {
                     if (memoryUsage + (c.size * Point.size) >= maxMemoryUsage)
@@ -412,7 +421,6 @@ namespace FastPoints {
                 }
 
                 Task.Run(async () => {
-                    int idx = i;
                     // Debug.Log($"Building local octree for chunk {idx}");
 
                     // string treePath = $"{dirPath}/tmp/octree_{chunks[idx].x}_{chunks[idx].y}_{chunks[idx].z}_l{chunks[idx].level}.dat";
@@ -428,7 +436,7 @@ namespace FastPoints {
                     // localTreeQW.Start();
                     Debug.Log($"Writing octree for chunk {idx}");
 
-                    Task<Node> bt = BuildLocalOctree(chunks[idx], treeQW);
+                    Task<Node> bt = BuildLocalOctree(c, treeQW);
                     await bt;
                     Node root = bt.Result;
 
@@ -558,6 +566,8 @@ namespace FastPoints {
                 pointBuffer.Release();
             });
 
+            Debug.Log("Did sorting call");
+
             // Recursively build tree
             AABB[] subdivisions = bbox.Subdivide(nodeCountAxis);
 
@@ -565,6 +575,7 @@ namespace FastPoints {
 
             List<Task<Node>> recursiveCalls = new List<Task<Node>>();
             int[] recursiveCallIndices = new int[nodeCountTotal];
+            int recursiveCount = 0;
 
             for (int i = 0; i < nodeCountTotal; i++) {
                 Point[] nodePoints = new Point[nodeCounts[i]];
@@ -574,6 +585,7 @@ namespace FastPoints {
                 if (nodeCounts[i] > sparseNodeCutoff) {  // Maximum size for single node
                     recursiveCallIndices[i] = recursiveCalls.Count;
                     recursiveCalls.Add(BuildLocalOctree(nodePoints, subdivisions[i], qw));
+                    recursiveCount++;
                 }
                 else {
                     currLayer[i] = new Node(nodePoints, subdivisions[i]);
@@ -584,8 +596,18 @@ namespace FastPoints {
                 }
             }
 
+            Debug.Log($"Waiting on {recursiveCount} recursive calls");
 
             Task.WaitAll(recursiveCalls.ToArray());
+
+            Debug.Log("Recursive calls done");
+
+            uint totalCount = 0;
+            foreach (Node n in currLayer)
+                totalCount += n.pointCount;
+            if (totalCount < points.Length)
+                Debug.LogError($"Expected {points.Length} points, got {totalCount}");
+
             for (int i = 0; i < nodeCountTotal; i++) {
                 if (recursiveCallIndices[i] != -1)
                     currLayer[i] = recursiveCalls[recursiveCallIndices[i]].Result;
@@ -598,6 +620,9 @@ namespace FastPoints {
             //     n.SetLevel(maxLevel);
 
             // Populate inner nodes
+            Debug.Log("Populating inner nodes");
+            Stopwatch watch = new Stopwatch();
+            watch.Start();
             int layerSize = nodeCountAxis;
             for (int i = treeDepth-1; i >= 0; i--) {
                 Func<int, int, int, Node> levelGridIndex = (int x, int y, int z) => currLayer[x*layerSize*layerSize + y*layerSize + z];
@@ -605,26 +630,32 @@ namespace FastPoints {
                 int nextLayerSize = (int)Mathf.Pow(2, i);
                 Node[] nextLayer = new Node[nextLayerSize * nextLayerSize * nextLayerSize];
 
+                Debug.Log($"Populating layer {i} with size {nextLayerSize} at {watch.ElapsedMilliseconds} ms");
+
+
                 for (int z = 0; z < nextLayerSize; z++) {
                     for (int y = 0; y < nextLayerSize; y++) {
                         for (int x = 0; x < nextLayerSize; x++) {
-                            if (levelGridIndex(x*2, y*2, z*2).points.Length == 0 && levelGridIndex(x*2, y*2, z*2+1).points.Length == 0 && 
-                                levelGridIndex(x*2, y*2+1, z*2).points.Length == 0 && levelGridIndex(x*2, y*2+1, z*2+1).points.Length == 0 && 
-                                levelGridIndex(x*2+1, y*2, z*2).points.Length == 0 && levelGridIndex(x*2+1, y*2, z*2+1).points.Length == 0 && 
-                                levelGridIndex(x*2+1, y*2+1, z*2).points.Length == 0 && levelGridIndex(x*2+1, y*2+1, z*2+1).points.Length == 0) {
+                            if (levelGridIndex(x*2, y*2, z*2).pointCount == 0 && levelGridIndex(x*2, y*2, z*2+1).pointCount == 0 && 
+                                levelGridIndex(x*2, y*2+1, z*2).pointCount == 0 && levelGridIndex(x*2, y*2+1, z*2+1).pointCount == 0 && 
+                                levelGridIndex(x*2+1, y*2, z*2).pointCount == 0 && levelGridIndex(x*2+1, y*2, z*2+1).pointCount == 0 && 
+                                levelGridIndex(x*2+1, y*2+1, z*2).pointCount == 0 && levelGridIndex(x*2+1, y*2+1, z*2+1).pointCount == 0) {
                                 Node n = new Node(new Point[0], new AABB(
                                     levelGridIndex(x*2,y*2,z*2).bbox.Min, 
                                     levelGridIndex(x*2+1,y*2+1,z*2+1).bbox.Max
                                 ));
                                 nextLayer[x*nextLayerSize*nextLayerSize+y*nextLayerSize+z] = n;
                             } else {
+                                Debug.Log("Else");
                                 Node n = new Node(new Node[] {
                                     levelGridIndex(x*2, y*2, z*2), levelGridIndex(x*2, y*2, z*2+1), 
                                     levelGridIndex(x*2, y*2+1, z*2), levelGridIndex(x*2, y*2+1, z*2+1), 
                                     levelGridIndex(x*2+1, y*2, z*2), levelGridIndex(x*2+1, y*2, z*2+1), 
                                     levelGridIndex(x*2+1, y*2+1, z*2), levelGridIndex(x*2+1, y*2+1, z*2+1)
                                 }, subsampleCount);
+                                Debug.Log("Here1");
                                 n.WriteNode(qw);
+                                Debug.Log("Here2");
                                 nextLayer[x*nextLayerSize*nextLayerSize+y*nextLayerSize+z] = n;
                             }
                         }
@@ -635,6 +666,9 @@ namespace FastPoints {
                 currLayer = nextLayer;
                 layerSize = nextLayerSize;
             }
+
+            watch.Stop();
+            Debug.Log($"Populating inner nodes took {watch.ElapsedMilliseconds} ms");
 
             return currLayer[0];
         }
