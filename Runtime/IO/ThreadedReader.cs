@@ -14,24 +14,17 @@ namespace FastPoints {
         string path;
         ConcurrentQueue<byte[]> queue;
         static int maxLength = 150;
-        int batchSize;
-        int offset;
-        int round;
         public bool IsRunning { get { return activeThreads > 0; } }
 
         (ReadThreadParams p, Thread t)[] readThreads;
-        int threadCount;
         int activeThreads;
 
         Stopwatch watch;
 
+        // Multi-threaded Reader
         public ThreadedReader(string path, int batchSize, ConcurrentQueue<byte[]> queue, int offset=0, int round=0, int threadCount=10) {
             this.path = path;
-            this.batchSize = batchSize;
             this.queue = queue;
-            this.offset = offset;
-            this.round = round;
-            this.threadCount = threadCount;
 
             watch = new Stopwatch();
 
@@ -39,7 +32,7 @@ namespace FastPoints {
 
             string outputStr = $"Created ThreadedReader with {threadCount} threads\n";
 
-            uint fileLength = (uint)(new FileInfo(path).Length);
+            uint fileLength = (uint)new FileInfo(path).Length;
             uint threadSize = fileLength / (uint)threadCount;
             if (round != 0)
                 threadSize -= threadSize % (uint)round;
@@ -51,7 +44,7 @@ namespace FastPoints {
             for (int i = 0; i < threadCount-1; i++) {
                 readThreads[i] = (
                     new ReadThreadParams(path, currOffset, threadSize, batchSize, queue, closeCallback),
-                    new Thread(new ParameterizedThreadStart(ThreadedReader.ReadThread))
+                    new Thread(new ParameterizedThreadStart(ReadThread))
                 );
 
                 outputStr += $"\tCreated thread {i} at offset {currOffset} with size {threadSize}\n";
@@ -60,12 +53,10 @@ namespace FastPoints {
 
             readThreads[threadCount-1] = (
                 new ReadThreadParams(path, currOffset, fileLength - currOffset, batchSize, queue, closeCallback),
-                new Thread(new ParameterizedThreadStart(ThreadedReader.ReadThread))
+                new Thread(new ParameterizedThreadStart(ReadThread))
             );
 
             outputStr += $"\tCreated thread {threadCount-1} at offset {currOffset} with size {fileLength-currOffset}\n";
-
-            // Debug.Log(outputStr);
         }
 
         public bool Start() {
@@ -74,7 +65,7 @@ namespace FastPoints {
 
             watch.Start();
 
-            for (int i = 0; i < threadCount; i++) {
+            for (int i = 0; i < readThreads.Length; i++) {
                 readThreads[i].Item2.Start(readThreads[i].Item1);
                 Interlocked.Add(ref activeThreads, 1);
             }
@@ -92,8 +83,8 @@ namespace FastPoints {
             FileStream fs = File.Open(tp.filePath, FileMode.Open, FileAccess.Read, FileShare.Read);
             fs.Seek(tp.offset, SeekOrigin.Begin);
 
-            uint startPos = (uint)fs.Position;
-            uint endPos;
+            //uint startPos = (uint)fs.Position;
+            //uint endPos;
 
             for (int i = 0; i < tp.count / tp.batchSize; i++) {
                 while (queue.Count > maxLength)
@@ -101,7 +92,7 @@ namespace FastPoints {
 
                 byte[] bytes = new byte[tp.batchSize];
                 fs.Read(bytes);
-                endPos = (uint)fs.Position;
+                //endPos = (uint)fs.Position;
                 //Debug.Log($"Read batch from {startPos} to {endPos}");
                 
                 queue.Enqueue(bytes);
@@ -120,12 +111,12 @@ namespace FastPoints {
                 //}
                 //if (c > 0 || c2 > 0)
                 //    Debug.Log($"Range {startPos}, {endPos} contains {c} big points, {c2} small points");
-                startPos = endPos;
+                //startPos = endPos;
             }
 
             byte[] lastBytes = new byte[tp.count % tp.batchSize];
             fs.Read(lastBytes);
-            endPos = (uint)fs.Position;
+            //endPos = (uint)fs.Position;
             //Debug.Log($"Read batch from {startPos} to {endPos}");
             queue.Enqueue(lastBytes);
 

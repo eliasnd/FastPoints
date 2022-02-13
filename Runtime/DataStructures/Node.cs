@@ -95,5 +95,17 @@ namespace FastPoints {
                 });
             }
         }
+
+    }
+
+    public class NodeReference
+    {
+        public string name;
+        public uint pointCount;
+        public uint offset;
+        public int level;
+        public int x;
+        public int y;
+        public int z;
     }
 }

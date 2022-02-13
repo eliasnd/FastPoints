@@ -26,19 +26,19 @@ namespace FastPoints {
 
         int actionsPerFrame = 2;
 
-        ConcurrentQueue<Action> actions;
+        Dispatcher dispatcher;
         ComputeShader computeShader;
         Octree tree;
         Thread treeThread;
         PointCloudData oldData = null;
 
         public void Awake() {
-            actions = new ConcurrentQueue<Action>();
+            dispatcher = new Dispatcher();
             computeShader = (ComputeShader)Resources.Load("CountAndSort");
         }
 
         public void Reset() {
-            actions = new ConcurrentQueue<Action>();
+            dispatcher = new Dispatcher();
             computeShader = (ComputeShader)Resources.Load("CountAndSort");
             oldData = null;
         }
@@ -49,7 +49,7 @@ namespace FastPoints {
                 // treeThread.Abort(); // Eventually clean up files here
                 tree = null;
                 treeThread = null;
-                actions = new ConcurrentQueue<Action>();
+                dispatcher = new Dispatcher();
             }
 
             if (data == null) {     // If no data
@@ -72,7 +72,7 @@ namespace FastPoints {
                     _ = data.PopulateSparseCloud(decimatedCloudSize);
 
                 if (generateTree) {
-                    tree = new Octree(treeLevels, "Resources/Octree", actions);
+                    tree = new Octree(treeLevels, "Resources/Octree", dispatcher);
                     treeThread = new Thread(new ParameterizedThreadStart(BuildTreeThread));
                     Debug.Log("Starting octree thread");
                     treeThread.Start(new BuildTreeParams(tree, data));
@@ -80,9 +80,9 @@ namespace FastPoints {
             }
 
             for (int i = 0; i < actionsPerFrame; i++) {
-                if (actions.Count > 0) {
+                if (dispatcher.Count > 0) {
                     Action action;
-                    actions.TryDequeue(out action);
+                    dispatcher.TryDequeue(out action);
                     action();
                 }
             }
@@ -130,7 +130,7 @@ namespace FastPoints {
 
         static void BuildTreeThread(object obj) {
             BuildTreeParams p = (BuildTreeParams)obj;
-            p.tree.BuildTree(p.data);
+            _ = p.tree.BuildTree(p.data);
         }
     }
 }

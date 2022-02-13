@@ -15,7 +15,7 @@ namespace FastPoints {
     // Eventually add dynamic level increases like Potree 2.0
 
     public class Octree {
-        ConcurrentQueue<Action> unityActions;   // Used for sending compute shader calls to main thread
+        Dispatcher dispatcher;   // Used for sending compute shader calls to main thread
         ComputeShader computeShader = (ComputeShader)Resources.Load("CountAndSort");
         int treeDepth;
         string dirPath;
@@ -30,9 +30,9 @@ namespace FastPoints {
         Stopwatch watch;
         TimeSpan checkpoint = new TimeSpan();
 
-        public Octree(int treeDepth, string dirPath, ConcurrentQueue<Action> unityActions) {
+        public Octree(int treeDepth, string dirPath, Dispatcher dispatcher) {
             this.treeDepth = treeDepth;
-            this.unityActions = unityActions;
+            this.dispatcher = dispatcher;
             this.dirPath = dirPath;
         }
 
@@ -112,7 +112,7 @@ namespace FastPoints {
             }
 
             readQueue.Clear();
-            data.LoadPointBatches(batchSize, readQueue);   // Start loading to get head start while merging
+            _ = data.LoadPointBatches(batchSize, readQueue);   // Start loading to get head start while merging
 
             Task.WaitAll(countTasks.ToArray());
 
@@ -389,7 +389,7 @@ namespace FastPoints {
             treeQW.Start();
             metaQW.Start((uint)(chunks.Count * 4));
             
-            int parallelChunkCount = 4; // Number of chunks to do in parallel
+            // int parallelChunkCount = 4; // Number of chunks to do in parallel
 
             uint[] chunkOffsets = new uint[chunks.Count];   // Offsets of each chunk into meta.dat
 
@@ -420,7 +420,7 @@ namespace FastPoints {
                     }
                 }
 
-                Task.Run(async () => {
+                _ = Task.Run(async () => {
                     // Debug.Log($"Building local octree for chunk {idx}");
 
                     // string treePath = $"{dirPath}/tmp/octree_{chunks[idx].x}_{chunks[idx].y}_{chunks[idx].z}_l{chunks[idx].level}.dat";
@@ -568,109 +568,91 @@ namespace FastPoints {
 
             Debug.Log("Did sorting call");
 
-            // Recursively build tree
-            AABB[] subdivisions = bbox.Subdivide(nodeCountAxis);
+            // MAKE SUM PYRAMID
 
-            Node[] currLayer = new Node[nodeCountTotal];
+            uint[][] sumPyramid = new uint[treeDepth][];
+            sumPyramid[treeDepth-1] = nodeCounts;
 
-            List<Task<Node>> recursiveCalls = new List<Task<Node>>();
-            int[] recursiveCallIndices = new int[nodeCountTotal];
-            int recursiveCount = 0;
+            for (int l = treeDepth-2; l >= 0; l--) {
+                int layerSize = (int)Mathf.Pow(2, l);
+                int lastLayerSize = layerSize * 2;
+                uint[] countLayer = new uint[layerSize * layerSize * layerSize];
+                uint[] lastLayer = sumPyramid[l+1];
 
-            for (int i = 0; i < nodeCountTotal; i++) {
-                Point[] nodePoints = new Point[nodeCounts[i]];
-                for (int j = 0; j < nodeCounts[i]; j++) {
-                    nodePoints[j] = sortedPoints[nodeStarts[i]+j];
+                for (int x = 0; x < layerSize; x++)
+                for (int y = 0; y < layerSize; y++)
+                for (int z = 0; z < layerSize; z++) {
+                    int countLayerIdx = (int)Utils.MortonEncode((uint)x, (uint)y, (uint)z);
+                    int lastLayerIdx = (int)Utils.MortonEncode((uint)(2 * x), (uint)(2 * y), (uint)(2 * z));
+                    uint sum = lastLayer[lastLayerIdx] + lastLayer[lastLayerIdx + 1] + lastLayer[lastLayerIdx + 2] +
+                            lastLayer[lastLayerIdx + 3] + lastLayer[lastLayerIdx + 4] + lastLayer[lastLayerIdx + 5] +
+                            lastLayer[lastLayerIdx + 6] + lastLayer[lastLayerIdx + 7];
+                    countLayer[countLayerIdx] = sum;
+                        
                 }
-                if (nodeCounts[i] > sparseNodeCutoff) {  // Maximum size for single node
-                    recursiveCallIndices[i] = recursiveCalls.Count;
-                    recursiveCalls.Add(BuildLocalOctree(nodePoints, subdivisions[i], qw));
-                    recursiveCount++;
-                }
-                else {
-                    currLayer[i] = new Node(nodePoints, subdivisions[i]);
-                    if (nodeCounts[i] > 0)
-                        currLayer[i].WriteNode(qw);
 
-                    recursiveCallIndices[i] = -1;
+                sumPyramid[l] = countLayer;
+            }
+
+            uint[][] offsetPyramid = new uint[treeDepth][];
+            for (int l = 0; l < treeDepth; l++)
+            {
+                uint curr = 0;
+                for (int i = 0; i < offsetPyramid[l].Length; i++)
+                {
+                    offsetPyramid[l][i] = curr;
+                    curr += sumPyramid[l][i];
                 }
             }
 
-            Debug.Log($"Waiting on {recursiveCount} recursive calls");
+            // MAKE NODES
 
-            Task.WaitAll(recursiveCalls.ToArray());
+            List<NodeReference> nodes = new List<NodeReference>();  // Contains all leaf nodes
 
-            Debug.Log("Recursive calls done");
+            NodeReference root = new NodeReference();
+            root.level = 0;
+            root.x = 0;
+            root.y = 0;
+            root.z = 0;
 
-            uint totalCount = 0;
-            foreach (Node n in currLayer)
-                totalCount += n.pointCount;
-            if (totalCount < points.Length)
-                Debug.LogError($"Expected {points.Length} points, got {totalCount}");
+            Stack<NodeReference> stack = new Stack<NodeReference>();
+            stack.Push(root);
 
-            for (int i = 0; i < nodeCountTotal; i++) {
-                if (recursiveCallIndices[i] != -1)
-                    currLayer[i] = recursiveCalls[recursiveCallIndices[i]].Result;
-            }
+            while (stack.Count > 0)
+            {
+                NodeReference nr = stack.Pop();
+                int nr_idx = (int)Utils.MortonEncode((uint)nr.x, (uint)nr.y, (uint)nr.z);
 
-            //int maxLevel = -1;
-            //foreach (Node n in currLayer)
-            //    maxLevel = n.level > maxLevel ? n.level : maxLevel;
-            // foreach (Node n in currLayer)
-            //     n.SetLevel(maxLevel);
+                uint count = sumPyramid[nr.level][nr_idx];
+                if (nr.level == treeDepth-1)
+                    if (count > 0)
+                        nodes.Add(nr);
+                else if (count > sparseNodeCutoff)
+                {
+                    for (int i = 0; i < 8; i++)
+                    {
+                        NodeReference child = new NodeReference();
+                        
+                        child.x = 2 * nr.x + ((i & 0b100) >> 2);
+                        child.y = 2 * nr.y + ((i & 0b010) >> 1);
+                        child.z = 2 * nr.z + ((i & 0b001) >> 0);
 
-            // Populate inner nodes
-            Debug.Log("Populating inner nodes");
-            Stopwatch watch = new Stopwatch();
-            watch.Start();
-            int layerSize = nodeCountAxis;
-            for (int i = treeDepth-1; i >= 0; i--) {
-                Func<int, int, int, Node> levelGridIndex = (int x, int y, int z) => currLayer[x*layerSize*layerSize + y*layerSize + z];
+                        int childIdx = (int)Utils.MortonEncode((uint)child.x, (uint)child.y, (uint)child.z);
 
-                int nextLayerSize = (int)Mathf.Pow(2, i);
-                Node[] nextLayer = new Node[nextLayerSize * nextLayerSize * nextLayerSize];
+                        child.level = nr.level+1;
+                        child.offset = offsetPyramid[nr.level+1][childIdx];
+                        child.pointCount = sumPyramid[child.level][childIdx];
 
-                Debug.Log($"Populating layer {i} with size {nextLayerSize} at {watch.ElapsedMilliseconds} ms");
-
-
-                for (int z = 0; z < nextLayerSize; z++) {
-                    for (int y = 0; y < nextLayerSize; y++) {
-                        for (int x = 0; x < nextLayerSize; x++) {
-                            if (levelGridIndex(x*2, y*2, z*2).pointCount == 0 && levelGridIndex(x*2, y*2, z*2+1).pointCount == 0 && 
-                                levelGridIndex(x*2, y*2+1, z*2).pointCount == 0 && levelGridIndex(x*2, y*2+1, z*2+1).pointCount == 0 && 
-                                levelGridIndex(x*2+1, y*2, z*2).pointCount == 0 && levelGridIndex(x*2+1, y*2, z*2+1).pointCount == 0 && 
-                                levelGridIndex(x*2+1, y*2+1, z*2).pointCount == 0 && levelGridIndex(x*2+1, y*2+1, z*2+1).pointCount == 0) {
-                                Node n = new Node(new Point[0], new AABB(
-                                    levelGridIndex(x*2,y*2,z*2).bbox.Min, 
-                                    levelGridIndex(x*2+1,y*2+1,z*2+1).bbox.Max
-                                ));
-                                nextLayer[x*nextLayerSize*nextLayerSize+y*nextLayerSize+z] = n;
-                            } else {
-                                Debug.Log("Else");
-                                Node n = new Node(new Node[] {
-                                    levelGridIndex(x*2, y*2, z*2), levelGridIndex(x*2, y*2, z*2+1), 
-                                    levelGridIndex(x*2, y*2+1, z*2), levelGridIndex(x*2, y*2+1, z*2+1), 
-                                    levelGridIndex(x*2+1, y*2, z*2), levelGridIndex(x*2+1, y*2, z*2+1), 
-                                    levelGridIndex(x*2+1, y*2+1, z*2), levelGridIndex(x*2+1, y*2+1, z*2+1)
-                                }, subsampleCount);
-                                Debug.Log("Here1");
-                                n.WriteNode(qw);
-                                Debug.Log("Here2");
-                                nextLayer[x*nextLayerSize*nextLayerSize+y*nextLayerSize+z] = n;
-                            }
-                        }
+                        stack.Push(child);
                     }
-                    
-                    
                 }
-                currLayer = nextLayer;
-                layerSize = nextLayerSize;
+                else if (count > 0)
+                    nodes.Add(nr);
             }
 
-            watch.Stop();
-            Debug.Log($"Populating inner nodes took {watch.ElapsedMilliseconds} ms");
+            // SUBSAMPLING
 
-            return currLayer[0];
+            return new Node();
         }
 
         async Task ExecuteAction(Action a) {

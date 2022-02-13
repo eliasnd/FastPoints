@@ -532,9 +532,9 @@ namespace FastPoints {
 
         public override async Task ReadPointsToQueue(ConcurrentQueue<Point[]> queue, int maxQueued, int batchSize) {
             await Task.Run(() => {
-                ConcurrentQueue<byte[]> bQueue = new ConcurrentQueue<byte[]>();
+                ConcurrentQueue<byte[]> bQueue = new();
 
-                ThreadedReader tr = new ThreadedReader(path, batchSize * pointSize, bQueue, bodyOffset, pointSize, 10);
+                ThreadedReader tr = new(path, batchSize * pointSize, bQueue, bodyOffset, pointSize, 10);
                 tr.Start();
 
                 int totalEnqueued = 0;
@@ -547,19 +547,7 @@ namespace FastPoints {
                     if (queue.Count >= maxQueued) {}
 
                     Point[] batch = ReadPointsBLE(bytes);
-                    //Point[] batch = Point.ToPoints(bytes);
-                    //int c1 = 0, c2 = 0;
                     queue.Enqueue(batch);
-                    //Debug.Log("Dequeued bytes");
-                    //foreach (Point p in batch)
-                    //{
-                    //    if (p.pos.x < -11)
-                    //        c1++;
-                    //    if (p.pos.x > 11)
-                    //        c2++;
-                    //}
-                    //if (c1 > 0 || c2 > 0)
-                    //    Debug.Log($"Batch contains {c1} small points, {c2} big points");
                     totalEnqueued += bytes.Length / pointSize;
                 }
             });  
