@@ -52,7 +52,7 @@ namespace FastPoints {
                     minZ = Min.z;
                     maxZ = Min.z + zStep;
                     for (int z = 0; z < count; z++) {
-                        result[count * count * x + count * y + z] = new AABB(new Vector3(minX, minY, minZ), new Vector3(maxX, maxY, maxZ));
+                        result[Convert.ToInt32(Utils.MortonEncode((uint)x, (uint)y, (uint)z))] = new AABB(new Vector3(minX, minY, minZ), new Vector3(maxX, maxY, maxZ));
                         minZ = maxZ;
                         maxZ += zStep;
                     }

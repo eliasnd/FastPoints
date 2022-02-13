@@ -1,4 +1,6 @@
+using System;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Collections.Concurrent;
 using System.Threading.Tasks;
@@ -10,26 +12,35 @@ namespace FastPoints {
         static int batchSize = 1000000;
         static int chunkDepth = 5;
         static int maxChunkSize = 10000000;
-        static ComputeShader computeShader = (ComputeShader)Resources.Load("CountAndSort");
 
         public static async Task MakeChunks(PointCloudData data, string targetDir, Dispatcher dispatcher) {
+            // Debug.Log("C1");
+            ComputeShader computeShader = null;
             ConcurrentQueue<Point[]> readQueue = new ConcurrentQueue<Point[]>();
 
             _ = data.LoadPointBatches(batchSize, readQueue);
-
-            if (data.MinPoint.x >= data.MaxPoint.x || data.MinPoint.y >= data.MaxPoint.y || data.MinPoint.z >= data.MaxPoint.z) 
-                await data.PopulateBounds();
 
             float[] minPoint = new float[] { data.MinPoint.x-1E-5f, data.MinPoint.y-1E-5f, data.MinPoint.z-1E-5f };
             float[] maxPoint = new float[] { data.MaxPoint.x+1E-5f, data.MaxPoint.y+1E-5f, data.MaxPoint.z+1E-5f };
 
             int chunkDepth = 5;
-            int chunkGridSize = (int)Mathf.Pow(2, chunkDepth);
+            int chunkGridSize = (int)Mathf.Pow(2, chunkDepth-1);
             ComputeBuffer chunkGridBuffer = null;  
 
             int threadBudget = Mathf.CeilToInt(batchSize / 4096f);
 
+            // Debug.Log("C2");
+
             // INIT COMPUTE SHADER
+
+            int[] mortonIndices = new int[chunkGridSize * chunkGridSize * chunkGridSize];
+
+            for (int x = 0; x < chunkGridSize; x++)
+            for (int y = 0; y < chunkGridSize; y++)
+            for (int z = 0; z < chunkGridSize; z++)
+                mortonIndices[x * chunkGridSize * chunkGridSize + y * chunkGridSize + z] = Convert.ToInt32(Utils.MortonEncode((uint)x, (uint)y, (uint)z));
+
+            // int maxMorton = mortonIndices.Max();
 
             await dispatcher.EnqueueAsync(() => {
                 computeShader = (ComputeShader)Resources.Load("CountAndSort");
@@ -39,10 +50,17 @@ namespace FastPoints {
                 computeShader.SetFloats("_MinPoint", minPoint);
                 computeShader.SetFloats("_MaxPoint", maxPoint);
 
+                ComputeBuffer mortonBuffer = new ComputeBuffer(chunkGridSize * chunkGridSize * chunkGridSize, sizeof(int));
+                mortonBuffer.SetData(mortonIndices);
+                computeShader.SetBuffer(computeShader.FindKernel("CountPoints"), "_MortonIndices", mortonBuffer);
+                computeShader.SetBuffer(computeShader.FindKernel("SortPoints"), "_MortonIndices", mortonBuffer);
+
                 computeShader.SetInt("_NodeCount", chunkGridSize);
                 computeShader.SetBuffer(computeShader.FindKernel("CountPoints"), "_Counts", chunkGridBuffer);
                 computeShader.SetInt("_ThreadBudget", threadBudget);
             });
+
+            // Debug.Log("C3");
 
             // COUNTING
 
@@ -85,29 +103,71 @@ namespace FastPoints {
             uint[] leafCounts = new uint[chunkGridSize * chunkGridSize * chunkGridSize];
             await dispatcher.EnqueueAsync(() => { chunkGridBuffer.GetData(leafCounts); chunkGridBuffer.Release(); });
 
+            // Debug.Log("C4");
+
+            uint sum = 0;
+            for (int i = 0; i < leafCounts.Length; i++)
+                sum += leafCounts[i];
+            if (sum != data.PointCount)
+                Debug.LogError($"Expected {data.PointCount} points, got {sum}");
+
             // MAKE SUM PYRAMID
 
             uint[][] sumPyramid = new uint[chunkDepth][];
             sumPyramid[chunkDepth-1] = leafCounts;
 
-            for (int level = chunkDepth-1; level > 0; level--) {
+            for (int level = chunkDepth-2; level >= 0; level--) {
                 int levelDim = (int)Mathf.Pow(2, level);
                 uint[] currLevel = new uint[levelDim * levelDim * levelDim];
 
                 uint[] lastLevel = sumPyramid[level+1];
 
+                uint levelSum = 0;
+
+                // HashSet<int> seenIndices = new();
+
                 for (uint x = 0; x < levelDim; x++)
                     for (uint y = 0; y < levelDim; y++)
                         for (uint z = 0; z < levelDim; z++)
                         {
-                            int chunkIdx = (int)Utils.MortonEncode(x, y, z);
+                            int chunkIdx = Convert.ToInt32(Utils.MortonEncode(x, y, z));
                             // Debug.Log($"Test: Morton code for {x}, {y}, {z} = {chunkIdx}");
-                            int childIdx = (int)Utils.MortonEncode(2*x, 2*y, 2*z);
+                            int childIdx = Convert.ToInt32(Utils.MortonEncode(2*x, 2*y, 2*z));
                             currLevel[chunkIdx] =
                                 lastLevel[childIdx] + lastLevel[childIdx+1] + lastLevel[childIdx+2] + lastLevel[childIdx+3] +
                                 lastLevel[childIdx+4] + lastLevel[childIdx+5] + lastLevel[childIdx+6] + lastLevel[childIdx+7];
+
+                            // seenIndices.Add(childIdx);
+                            // seenIndices.Add(childIdx+1);
+                            // seenIndices.Add(childIdx+2);
+                            // seenIndices.Add(childIdx+3);
+                            // seenIndices.Add(childIdx+4);
+                            // seenIndices.Add(childIdx+5);
+                            // seenIndices.Add(childIdx+6);
+                            // seenIndices.Add(childIdx+7);
+
+                            // levelSum += currLevel[chunkIdx];
                         }
+
+                // for (int i = 0; i < lastLevel.Length; i++)
+                //     if (!seenIndices.Contains(i))
+                //         Debug.LogError($"Didn't read index {i} from layer {level+1}");
+
+                // if (levelSum != data.PointCount)
+                //     Debug.LogError($"Level {level} sum is {levelSum}");
+
+                sumPyramid[level] = currLevel;
             }
+
+            for (int level = 0; level < chunkDepth; level++) {
+                sum = 0;
+                for (int i = 0; i < sumPyramid[level].Length; i++)
+                    sum += sumPyramid[level][i];
+                if (sum != data.PointCount)
+                    Debug.LogError($"Expected {data.PointCount} points, got {sum} on level {level}");
+            }
+
+            // Debug.Log("C5");
 
             // MAKE LUT
 
@@ -116,7 +176,11 @@ namespace FastPoints {
 
             void AddToLUT(int level, uint x, uint y, uint z)
             {
-                int idx = (int)Utils.MortonEncode(x, y, z);
+                int idx = Convert.ToInt32(Utils.MortonEncode(x, y, z));
+
+                if (sumPyramid[level][idx] == 0)
+                    return;
+
                 if (level == chunkDepth-1)  // If at bottom, automatically add
                 {
                     lut[idx] = chunkPaths.Count;
@@ -127,7 +191,7 @@ namespace FastPoints {
                     int chunkIdx = chunkPaths.Count;
                     chunkPaths.Add($"{targetDir}/chunks/{ToNodeID(level, (int)Mathf.Pow(2, level), (int)x, (int)y, (int)z)}.dat");
                     uint chunkSize = (uint)Mathf.Pow(2, chunkDepth-1-level);    // CHECK
-                    int childIdx = (int)Utils.MortonEncode(chunkSize*x, chunkSize*y, chunkSize*z);
+                    int childIdx = Convert.ToInt32(Utils.MortonEncode(chunkSize*x, chunkSize*y, chunkSize*z));
                     for (int i = 0; i < chunkSize * chunkSize * chunkSize; i++)
                         lut[childIdx+i] = chunkIdx;
                 }
@@ -146,10 +210,15 @@ namespace FastPoints {
 
             AddToLUT(0, 0, 0, 0);
 
+            // Debug.Log("C6");
+
             // START WRITING CHUNKS
 
             ConcurrentQueue<(Point[], uint[])> sortedBatches = new ConcurrentQueue<(Point[], uint[])>();
             int maxSorted = 100;
+
+            Directory.CreateDirectory($"{targetDir}");
+            Directory.CreateDirectory($"{targetDir}/chunks");
 
             ThreadedWriter chunkWriter = new ThreadedWriter(12);
 
@@ -184,6 +253,8 @@ namespace FastPoints {
                 }
             });
 
+            // Debug.Log("C7");
+
             // SORT POINTS
 
             int pointsToQueue = data.PointCount;
@@ -191,11 +262,13 @@ namespace FastPoints {
                 while (sortedBatches.Count > maxSorted) {}
 
                 Point[] batch;
-                while (!readQueue.TryDequeue(out batch)) {}
+                while (Interlocked.Read(ref activeTasks) > 100 || !readQueue.TryDequeue(out batch))
+                    Thread.Sleep(5);
                     // Debug.Log("Waiting on batch from disk");  
 
                 uint[] chunkIndices = new uint[batch.Length];             
 
+                Interlocked.Increment(ref activeTasks);
                 dispatcher.Enqueue(() => {
                     ComputeBuffer batchBuffer = new ComputeBuffer(batchSize, Point.size);
                     batchBuffer.SetData(batch);
@@ -214,12 +287,17 @@ namespace FastPoints {
                     sortedBuffer.Release();
 
                     sortedBatches.Enqueue((batch, chunkIndices));
+                    Interlocked.Decrement(ref activeTasks);
                 });
 
                 pointsToQueue -= batch.Length;
             }
 
+            // Debug.Log("C8");
+
             await writeChunksTask;
+
+            // Debug.Log("C9");
         }
 
         static string ToNodeID(int level, int gridSize, int x, int y, int z) {
