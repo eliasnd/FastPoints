@@ -122,10 +122,6 @@ namespace FastPoints {
 
                 uint[] lastLevel = sumPyramid[level+1];
 
-                uint levelSum = 0;
-
-                // HashSet<int> seenIndices = new();
-
                 for (uint x = 0; x < levelDim; x++)
                     for (uint y = 0; y < levelDim; y++)
                         for (uint z = 0; z < levelDim; z++)
@@ -136,35 +132,9 @@ namespace FastPoints {
                             currLevel[chunkIdx] =
                                 lastLevel[childIdx] + lastLevel[childIdx+1] + lastLevel[childIdx+2] + lastLevel[childIdx+3] +
                                 lastLevel[childIdx+4] + lastLevel[childIdx+5] + lastLevel[childIdx+6] + lastLevel[childIdx+7];
-
-                            // seenIndices.Add(childIdx);
-                            // seenIndices.Add(childIdx+1);
-                            // seenIndices.Add(childIdx+2);
-                            // seenIndices.Add(childIdx+3);
-                            // seenIndices.Add(childIdx+4);
-                            // seenIndices.Add(childIdx+5);
-                            // seenIndices.Add(childIdx+6);
-                            // seenIndices.Add(childIdx+7);
-
-                            // levelSum += currLevel[chunkIdx];
                         }
 
-                // for (int i = 0; i < lastLevel.Length; i++)
-                //     if (!seenIndices.Contains(i))
-                //         Debug.LogError($"Didn't read index {i} from layer {level+1}");
-
-                // if (levelSum != data.PointCount)
-                //     Debug.LogError($"Level {level} sum is {levelSum}");
-
                 sumPyramid[level] = currLevel;
-            }
-
-            for (int level = 0; level < chunkDepth; level++) {
-                sum = 0;
-                for (int i = 0; i < sumPyramid[level].Length; i++)
-                    sum += sumPyramid[level][i];
-                if (sum != data.PointCount)
-                    Debug.LogError($"Expected {data.PointCount} points, got {sum} on level {level}");
             }
 
             // Debug.Log("C5");
