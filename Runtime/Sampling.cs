@@ -1,6 +1,10 @@
 using UnityEngine;
 
 using System;
+using System.Linq;
+using System.Collections.Generic;
+
+using Random = System.Random;
 
 namespace FastPoints {
     public class Sampling {
@@ -45,6 +49,155 @@ namespace FastPoints {
                 result[i] = source[i];
 
             return result;
+        }
+
+        public static void Sample(Node node, Action<Node> cb) {
+            // if (node != null && node.points != null) {
+            //     foreach (Point pt in node.points)
+            //         if (Vector3.Min(pt.pos, node.bbox.Min) != node.bbox.Min || Vector3.Max(pt.pos, node.bbox.Max) != node.bbox.Max)
+            //             Debug.LogError("Found point OOB");
+            // } else
+            //     Debug.Log("Sampling null");
+                
+
+            void traverse(Node node, Action<Node> cb) {
+                foreach (Node child in node.children)
+                    if (child != null && !child.subsampled)
+                        traverse(child, cb);
+                cb(node);
+            }
+
+            traverse(node, (Node node) => {
+                node.subsampled = true;
+
+                uint pointCount = node.pointCount;
+
+                int gridSize = 128;
+                int[] grid = new int[gridSize * gridSize * gridSize];
+                for (int i = 0; i < grid.Length; i++)
+                    grid[i] = -1;
+
+                int iteration = 0;
+                iteration++;
+
+                Vector3 max = node.bbox.Max;
+                Vector3 min = node.bbox.Min;
+
+                Vector3 size = max - min;
+
+                (int, double) ToCellIdx(Vector3 pos) {
+                    Vector3 normalized = new Vector3((pos.x - min.x) / size.x, (pos.y - min.y) / size.y, (pos.z - min.z) / size.z);
+
+                    float lx = 2f * ((float)gridSize * normalized.x % 1f) - 1f;
+                    float ly = 2f * ((float)gridSize * normalized.y % 1f) - 1f;
+                    float lz = 2f * ((float)gridSize * normalized.z % 1f) - 1f;
+
+                    float distance = Mathf.Sqrt(lx * lx + ly * ly + lz * lz);
+
+                    int x = Mathf.FloorToInt(gridSize * normalized.x);
+                    int y = Mathf.FloorToInt(gridSize * normalized.y);
+                    int z = Mathf.FloorToInt(gridSize * normalized.z);
+
+                    int idx = x * gridSize * gridSize + y * gridSize + z;
+
+                    return ( idx, distance );
+                }
+
+                if (node.IsLeaf) {
+                    int[] indices = new int[node.pointCount];
+                    for (int i = 0; i < node.pointCount; i++)
+                        indices[i] = i;
+
+                    Random rnd = new Random();
+                    indices = indices.OrderBy(i => rnd.Next()).ToArray();
+
+                    Point[] pointBuffer = new Point[node.pointCount];
+                    for (int i = 0; i < node.pointCount; i++)
+                        pointBuffer[i] = node.points[indices[i]];
+
+                    node.points = pointBuffer;
+                }
+                else
+                {
+                    List<bool[]> acceptedChildFlags = new();
+                    List<int> rejectedCounts = new();
+                    int acceptedCount = 0;
+
+                    for (int c = 0; c < 8; c++)
+                    {
+                        Node child = node.children[c];
+
+                        if (child == null) { 
+                            acceptedChildFlags.Add(null);
+                            rejectedCounts.Add(0);
+                            continue;
+                        }
+
+                        bool[] acceptedFlags = new bool[(int)child.pointCount];
+                        int rejectedCount = 0;
+
+                        for (int i = 0; i < child.pointCount; i++) {
+                            (int, double) cellIdx = ToCellIdx(child.points[i].pos);
+
+                            try {
+
+                                bool isAccepted =
+                                    child.pointCount < 100 ||
+                                    cellIdx.Item2 < 0.7 * Mathf.Sqrt(3) && grid[cellIdx.Item1] < iteration;
+
+                            
+                                if (isAccepted)
+                                {
+                                    grid[cellIdx.Item1] = iteration;
+                                    acceptedCount++;
+                                } else
+                                    rejectedCount++;
+
+                                acceptedFlags[i] = isAccepted;
+                            } catch (Exception e) {
+                                int tmp = 0;
+                            }
+                        }
+
+                        acceptedChildFlags.Add(acceptedFlags);
+                        rejectedCounts.Add(rejectedCount);
+                    }
+
+                    List<Point> accepted = new(acceptedCount);
+                    for (int c = 0; c < 8; c++)
+                    {
+                        Node child = node.children[c];
+
+                        if (child == null)
+                            continue;
+
+                        int rejectedCount = rejectedCounts[c];
+                        bool[] acceptedFlags = acceptedChildFlags[c];
+
+                        List<Point> rejected = new(rejectedCount);
+
+                        for (int i = 0; i < child.pointCount; i++)
+                        {
+                            bool isAccepted = acceptedFlags[i];
+                            if (acceptedFlags[i])
+                                accepted.Add(child.points[i]);
+                            else
+                                rejected.Add(child.points[i]);
+                        }
+
+                        if (rejectedCount == 0)
+                            node.children[c] = null;
+                        else
+                        {
+                            child.points = rejected.ToArray();
+                            child.pointCount = (uint)rejectedCount;
+
+                            cb(child);
+                        }
+                    }
+                }
+
+            });
         }
     }
 }

@@ -14,14 +14,16 @@ namespace FastPoints {
         static int maxChunkSize = 10000000;
 
         public static async Task MakeChunks(PointCloudData data, string targetDir, Dispatcher dispatcher) {
-            // Debug.Log("C1");
+            Debug.Log("C1");
             ComputeShader computeShader = null;
             ConcurrentQueue<Point[]> readQueue = new ConcurrentQueue<Point[]>();
 
             _ = data.LoadPointBatches(batchSize, readQueue);
 
-            float[] minPoint = new float[] { data.MinPoint.x-1E-5f, data.MinPoint.y-1E-5f, data.MinPoint.z-1E-5f };
-            float[] maxPoint = new float[] { data.MaxPoint.x+1E-5f, data.MaxPoint.y+1E-5f, data.MaxPoint.z+1E-5f };
+            // float[] minPoint = new float[] { data.MinPoint.x-1E-5f, data.MinPoint.y-1E-5f, data.MinPoint.z-1E-5f };
+            // float[] maxPoint = new float[] { data.MaxPoint.x+1E-5f, data.MaxPoint.y+1E-5f, data.MaxPoint.z+1E-5f };
+            float[] minPoint = new float[] { data.MinPoint.x, data.MinPoint.y, data.MinPoint.z };
+            float[] maxPoint = new float[] { data.MaxPoint.x, data.MaxPoint.y, data.MaxPoint.z };
 
             int chunkDepth = 5;
             int chunkGridSize = (int)Mathf.Pow(2, chunkDepth-1);
@@ -60,7 +62,7 @@ namespace FastPoints {
                 computeShader.SetInt("_ThreadBudget", threadBudget);
             });
 
-            // Debug.Log("C3");
+            Debug.Log("C3");
 
             // COUNTING
 
@@ -103,7 +105,7 @@ namespace FastPoints {
             uint[] leafCounts = new uint[chunkGridSize * chunkGridSize * chunkGridSize];
             await dispatcher.EnqueueAsync(() => { chunkGridBuffer.GetData(leafCounts); chunkGridBuffer.Release(); });
 
-            // Debug.Log("C4");
+            Debug.Log("C4");
 
             uint sum = 0;
             for (int i = 0; i < leafCounts.Length; i++)
@@ -137,7 +139,7 @@ namespace FastPoints {
                 sumPyramid[level] = currLevel;
             }
 
-            // Debug.Log("C5");
+            Debug.Log("C5");
 
             // MAKE LUT
 
@@ -180,7 +182,7 @@ namespace FastPoints {
 
             AddToLUT(0, 0, 0, 0);
 
-            // Debug.Log("C6");
+            Debug.Log("C6");
 
             // START WRITING CHUNKS
 
@@ -191,6 +193,8 @@ namespace FastPoints {
             Directory.CreateDirectory($"{targetDir}/chunks");
 
             ThreadedWriter chunkWriter = new ThreadedWriter(12);
+
+            bool sortTest = true;
 
             Task writeChunksTask = Task.Run(() => {
                 int chunkCount = chunkPaths.Count;
@@ -208,6 +212,13 @@ namespace FastPoints {
 
                     for (int i = 0; i < tup.batch.Length; i++)
                         sorted[lut[tup.indices[i]]].Add(tup.batch[i]);
+
+                    for (int i = 0; i < sorted.Length; i++)
+                        foreach (List<Point> list in sorted) {
+                            foreach (Point pt in list) {
+                                if (Vector3.Max(chunk))
+                            }
+                        }
                     
 
                     for (int i = 0; i < chunkCount; i++) {
@@ -223,7 +234,7 @@ namespace FastPoints {
                 }
             });
 
-            // Debug.Log("C7");
+            Debug.Log("C7");
 
             // SORT POINTS
 
@@ -263,11 +274,11 @@ namespace FastPoints {
                 pointsToQueue -= batch.Length;
             }
 
-            // Debug.Log("C8");
+            Debug.Log("C8");
 
             await writeChunksTask;
 
-            // Debug.Log("C9");
+            Debug.Log("C9");
         }
 
         static string ToNodeID(int level, int gridSize, int x, int y, int z) {

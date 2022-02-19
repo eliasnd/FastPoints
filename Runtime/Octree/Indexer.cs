@@ -41,6 +41,7 @@ namespace FastPoints {
         {
             this.qw = qw;
             this.dispatcher = dispatcher;
+            this.rand = new Random();
         }
 
         public async Task IndexChunk(PointCloudData data, Node root, string chunkPath) { 
@@ -49,11 +50,40 @@ namespace FastPoints {
             // Get BBOX better eventually
             string chunkCode = Path.GetFileNameWithoutExtension(chunkPath);
             AABB curr = new AABB(data.MinPoint, data.MaxPoint);
+
+            // Test bbox subdivide
+            /* AABB[] test1 = curr.Subdivide(8);
+            Queue<AABB> testQueue = new();
+            testQueue.Enqueue(curr);
+            for (int i = 0; i < 3; i++) {
+                for (int b = 0; b < Mathf.Pow(2, i); b++) {
+                    AABB bb = testQueue.Dequeue();
+                    foreach (AABB bbox in bb.Subdivide(2))
+                        testQueue.Enqueue(bbox);
+                }
+            }
+            AABB[] test2 = testQueue.ToArray();
+            int tmp;
+            foreach (AABB bbox in test1) {
+                bool found = false;
+                foreach (AABB bbox2 in test2) {
+                    if (bbox.Equals(bbox2))
+                        found = true;
+                }
+                if (!found)
+                    tmp = 0;
+                else
+                    tmp = 0;
+            } */
+
+
             for (int i = 1; i < chunkCode.Length; i++) {
                 AABB[] bbs = curr.Subdivide(2);
                 int idx = chunkCode[i] - '0';
                 curr = bbs[idx];
             }
+
+
 
             lock (footprintLock)
             {
@@ -62,15 +92,25 @@ namespace FastPoints {
 
             Point[] points = Point.ToPoints(File.ReadAllBytes(chunkPath));
 
-            root.bbox = new AABB(new Vector3(curr.Min.x-1E-5f, curr.Min.y-1E-5f, curr.Min.z-1E-5f), new Vector3(curr.Max.x+1E-5f, curr.Max.y+1E-5f, curr.Max.z+1E-5f));
+            // root.bbox = new AABB(new Vector3(curr.Min.x-1E-5f, curr.Min.y-1E-5f, curr.Min.z-1E-5f), new Vector3(curr.Max.x+1E-5f, curr.Max.y+1E-5f, curr.Max.z+1E-5f));
+            root.bbox = new AABB(new Vector3(curr.Min.x, curr.Min.y, curr.Min.z), new Vector3(curr.Max.x, curr.Max.y, curr.Max.z));
             root.name = "n";
 
-            await IndexPoints(root, points);
+            foreach (Point pt in points) {
+                if (Vector3.Min(root.bbox.Min, pt.pos) != root.bbox.Min || Vector3.Max(root.bbox.Max, pt.pos) != root.bbox.Max)
+                    Debug.Log("Problem!");
+            }
 
-            await SubsampleNode(root, qw, rand);
+            await IndexPoints(root, points);
         }
 
         public async Task IndexPoints(Node root, Point[] points) {
+            // OOB check
+            foreach (Point pt in points) {
+                if (Vector3.Min(root.bbox.Min, pt.pos) != root.bbox.Min || Vector3.Max(root.bbox.Max, pt.pos) != root.bbox.Max)
+                    Debug.LogError($"Found point ({pt.pos.x}, {pt.pos.y}, {pt.pos.z}) outside bbox in root {root.name}");
+            }
+            Debug.Log("I2");
             await Task.Run(async () =>
             {
                 int gridSize = (int)Mathf.Pow(2, treeDepth-1);
@@ -86,13 +126,18 @@ namespace FastPoints {
 
                 ComputeShader computeShader;
 
-                float[] minPoint = new float[] { root.bbox.Min.x-1E-5f, root.bbox.Min.y-1E-5f, root.bbox.Min.z-1E-5f };
-                float[] maxPoint = new float[] { root.bbox.Max.x+1E-5f, root.bbox.Max.y+1E-5f, root.bbox.Max.z+1E-5f };
+                // float[] minPoint = new float[] { root.bbox.Min.x-1E-5f, root.bbox.Min.y-1E-5f, root.bbox.Min.z-1E-5f };
+                // float[] maxPoint = new float[] { root.bbox.Max.x+1E-5f, root.bbox.Max.y+1E-5f, root.bbox.Max.z+1E-5f };
+                float[] minPoint = new float[] { root.bbox.Min.x, root.bbox.Min.y, root.bbox.Min.z };
+                float[] maxPoint = new float[] { root.bbox.Max.x, root.bbox.Max.y, root.bbox.Max.z };
+
 
                 // Action outputs
                 uint[] nodeCounts = new uint[gridTotal];
                 uint[] nodeStarts = new uint[gridTotal];
                 Point[] sortedPoints = new Point[points.Length];
+
+                Debug.Log("I3");
 
                 await dispatcher.EnqueueAsync(() => {
                     // INITIALIZE
@@ -160,7 +205,7 @@ namespace FastPoints {
                     pointBuffer.Release();
                 }); 
 
-                Debug.Log("I3");
+                Debug.Log("I4");
 
                 // MAKE SUM PYRAMID
 
@@ -200,7 +245,39 @@ namespace FastPoints {
                     }
                 }
 
-                Debug.Log("I4");
+                Debug.Log("I5");
+
+                // TEST SORTING
+
+                uint[] testCounts = new uint[gridTotal];
+                AABB[] leafBB = root.bbox.Subdivide(gridSize);
+
+                float threshold = 1f / gridSize;
+                foreach (Point pt in points) {
+                    int x = Mathf.Min(Mathf.FloorToInt(Mathf.InverseLerp(root.bbox.Min.x, root.bbox.Max.x, pt.pos.x) / threshold), gridSize-1);
+                    int y = Mathf.Min(Mathf.FloorToInt(Mathf.InverseLerp(root.bbox.Min.y, root.bbox.Max.y, pt.pos.y) / threshold), gridSize-1);
+                    int z = Mathf.Min(Mathf.FloorToInt(Mathf.InverseLerp(root.bbox.Min.z, root.bbox.Max.z, pt.pos.z) / threshold), gridSize-1);
+                    // return 0 |= splitBy3(x) | splitBy3(y) << 1 | splitBy3(z) << 2;
+                    int idx = mortonIndices[x * gridSize * gridSize + y * gridSize + z];
+                    if (Vector3.Max(pt.pos, leafBB[idx].Max) != leafBB[idx].Max || Vector3.Min(pt.pos, leafBB[idx].Min) != leafBB[idx].Min)
+                        Debug.LogError("Found point outside");
+                    testCounts[idx]++;
+                }
+
+                uint offset = 0;
+                for (int i = 0; i < gridTotal; i++) {
+                    uint size = sumPyramid[treeDepth-1][i];
+                    for (int j = 0; j < size; j++) {
+                        if (Vector3.Max(sortedPoints[offset].pos, leafBB[i].Max) != leafBB[i].Max || Vector3.Min(sortedPoints[offset].pos, leafBB[i].Min) != leafBB[i].Min)
+                            Debug.LogError("Found point outside");
+                        offset++;
+                    }
+                }
+
+                AABB[][] bboxPyramid = new AABB[treeDepth][];
+                for (int l = 0; l < treeDepth; l++)
+                    bboxPyramid[l] = root.bbox.Subdivide((int)Mathf.Pow(2,l));
+                    
 
                 // CREATE NODE REFERENCES
 
@@ -215,34 +292,41 @@ namespace FastPoints {
                 Stack<NodeReference> stack = new();
                 stack.Push(rootRef);
 
+                int c = 0;
                 while (stack.Count > 0) {
+                    c++;
                     NodeReference nr = stack.Pop();
-                    uint numPoints = sumPyramid[nr.level][Convert.ToInt32(Utils.MortonEncode((uint)nr.x, (uint)nr.y, (uint)nr.z))];
+                    int nodeIdx = Convert.ToInt32(Utils.MortonEncode((uint)nr.x, (uint)nr.y, (uint)nr.z));
+                    uint numPoints = sumPyramid[nr.level][nodeIdx];
                     if (nr.level == treeDepth-1) {
                         if (numPoints > 0)
                             nodeRefs.Add(nr);
                     } else if (numPoints > maxNodeSize) {
+                        int childIdx = Convert.ToInt32(Utils.MortonEncode((uint)(2*nr.x), (uint)(2*nr.y), (uint)(2*nr.z)));
                         for (int i = 0; i < 8; i++) {
-                            int childIdx = Convert.ToInt32(Utils.MortonEncode((uint)(2*nr.x), (uint)(2*nr.y), (uint)(2*nr.z)))+i;
-                            uint count = sumPyramid[nr.level+1][childIdx];
+                            uint count = sumPyramid[nr.level+1][childIdx+i];
 
                             if (count > 0) {
                                 NodeReference child = new();
                                 child.level = nr.level+1;
                                 child.name = nr.name + i;
-                                child.offset = offsetPyramid[nr.level + 1][childIdx];
+                                child.offset = offsetPyramid[nr.level + 1][childIdx+i];
                                 child.pointCount = count;
-                                child.x = 2 * nr.x + ((i & 0b100) >> 2);
+                                child.bbox = bboxPyramid[nr.level + 1][childIdx+i];
+                                
+                                child.z = 2 * nr.z + ((i & 0b100) >> 2);
                                 child.y = 2 * nr.y + ((i & 0b010) >> 1);
-                                child.z = 2 * nr.z + ((i & 0b001) >> 0);
+                                child.x = 2 * nr.x + ((i & 0b001) >> 0);
 
                                 stack.Push(child);
                             }
                         }
                     } else if (numPoints > 0) {
-                        stack.Push(nr);
+                        nodeRefs.Add(nr);
                     }
                 }
+
+                Debug.Log("I6");
 
                 // CREATE NODES
 
@@ -282,17 +366,45 @@ namespace FastPoints {
                     Node node = ExpandReference(nr);
                     node.pointCount = nr.pointCount;
                     node.points = new Point[node.pointCount];
-                    points.CopyTo(node.points, nr.offset);
+                    // node.bbox = nr.bbox;
 
-                    if (node.pointCount > maxNodeSize)
-                        recursiveCalls.Add(IndexPoints(node, node.points));
+                    Array.Copy(points, nr.offset, node.points, 0, nr.pointCount);
+
+                    Debug.Log($"Created node {node.name} with bbox ({node.bbox.Min.x}, {node.bbox.Min.y}, {node.bbox.Min.z}), ({node.bbox.Max.x}, {node.bbox.Max.y}, {node.bbox.Max.z})");
+                    Vector3 min = new Vector3(float.MaxValue, float.MaxValue, float.MaxValue);
+                    Vector3 max = new Vector3(float.MinValue, float.MinValue, float.MinValue);
+                    foreach (Point pt in node.points) {
+                        min = Vector3.Min(min, pt.pos);
+                        max = Vector3.Max(max, pt.pos);
+                        /* if (Vector3.Min(node.bbox.Min, pt.pos) != node.bbox.Min || Vector3.Max(node.bbox.Max, pt.pos) != node.bbox.Max)
+                        Debug.LogError($"Found point ({pt.pos.x}, {pt.pos.y}, {pt.pos.z}) outside bbox in node {node.name}"); */
+                    }
+
+                    // if (node.pointCount > maxNodeSize)
+                    //     recursiveCalls.Add(IndexPoints(node, node.points));
                 }
 
                 Task.WaitAll(recursiveCalls.ToArray());
 
+                Debug.Log("I7");
+
                 // POPULATE INNER NODES
 
-                await SubsampleNode(root, qw, rand);
+                //await SubsampleNode(root, qw, rand);
+                Sampling.Sample(root, (Node node) => {
+                    node.offset = (uint)qw.Enqueue(Point.ToBytes(node.points));
+                });
+
+                void traverse(Node node, Action<Node> cb) {
+                    foreach (Node child in node.children)
+                        if (child != null)
+                            traverse(child, cb);
+                    cb(node);
+                }
+
+                traverse(root, (Node n) => { n.children = null; });
+
+                Debug.Log("I8");
             });
         }
 
@@ -306,11 +418,11 @@ namespace FastPoints {
 
                 // Should do space constraint or something
 
-                Point[] newPoints = new Point[subsampleSize];
+                /* Point[] newPoints = new Point[subsampleSize];
                 for (int i = 0; i < subsampleSize; i++)
                     newPoints[i] = node.points[rand.Next(0, (int)node.pointCount)];
 
-                node.pointCount = (uint)subsampleSize;
+                node.pointCount = (uint)subsampleSize; */
 
                 List<Task> childTasks = new();
 
@@ -318,7 +430,31 @@ namespace FastPoints {
                     if (node.children[i] != null)
                         childTasks.Add(SubsampleNode(node.children[i], qw, rand));
 
-                node.points = newPoints;
+                List<Point> newPoints = new List<Point>();
+
+                int budget = subsampleSize;
+                int[] childBudgets = new int[8];
+                for (int i = 0; i < 7; i++) {
+                    if (node.children[i].pointCount < budget / (8-i))
+                        childBudgets[i] = (int)node.children[i].pointCount;
+                    else
+                        childBudgets[i] = budget / (8-i);
+                    budget -= childBudgets[i];
+                }
+
+                childBudgets[7] = budget;
+
+                for (int i = 0; i < 8; i++) {
+                    if (childBudgets[i] == node.children[i].pointCount)
+                        newPoints.AddRange(node.children[i].points);
+                    else {
+                        Point[] childPoints = new Point[childBudgets[i]];
+                        for (int p = 0; p < childBudgets[i]; p++)
+                            newPoints.Add(node.children[i].points[p * (node.children[i].pointCount / childBudgets[i])]);
+                    }
+                }
+
+                node.points = newPoints.ToArray();
                 node.subsampled = true;
 
                 Task.WaitAll(childTasks.ToArray());

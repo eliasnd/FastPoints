@@ -12,7 +12,7 @@ namespace FastPoints {
 
         public Point[] points;
         public uint pointCount;
-        public Node[] children;
+        public Node[] children = new Node[8];
         public uint offset;
         public bool subsampled;
         public bool IsLeaf
@@ -38,6 +38,7 @@ namespace FastPoints {
         public int x;
         public int y;
         public int z;
+        public AABB bbox;
     }
 
     public class NodeEntry

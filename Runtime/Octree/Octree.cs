@@ -17,14 +17,15 @@ namespace FastPoints {
     public class Octree : ScriptableObject{
         AABB bbox;
         NodeEntry[] nodes;
+        string dirPath;
 
         public async Task BuildTree(PointCloudData data, int treeDepth, string dirPath, Dispatcher dispatcher) {
             if (data.MinPoint.x >= data.MaxPoint.x || data.MinPoint.y >= data.MaxPoint.y || data.MinPoint.z >= data.MaxPoint.z) 
                 await data.PopulateBounds();
 
-            // await Chunker.MakeChunks(data, dirPath, dispatcher);
+            this.dirPath = dirPath;
 
-            // foreach (string chunkPath in Directory.GetFiles($"{dirPath}/chunks"))
+            // await Chunker.MakeChunks(data, "Resources/Octree", dispatcher);
 
             Task indexTask;
             try {
@@ -38,6 +39,8 @@ namespace FastPoints {
                     chunkDepth = Math.Max(chunkDepth, Path.GetFileNameWithoutExtension(chunkPaths[c]).Length-1);
 
                 Node[] chunkRoots = new Node[chunkPaths.Length];
+                for (int i = 0; i < chunkPaths.Length; i++)
+                    chunkRoots[i] = new Node();
 
                 // DO INDEXING
 
@@ -114,9 +117,11 @@ namespace FastPoints {
     struct BuildTreeParams {
         public Octree tree;
         public PointCloudData data;
-        public BuildTreeParams(Octree tree, PointCloudData data) {
+        public Dispatcher dispatcher;
+        public BuildTreeParams(Octree tree, PointCloudData data, Dispatcher dispatcher) {
             this.tree = tree;
             this.data = data;
+            this.dispatcher = dispatcher;
         }
     }
 }

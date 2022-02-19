@@ -72,10 +72,10 @@ namespace FastPoints {
                     _ = data.PopulateSparseCloud(decimatedCloudSize);
 
                 if (generateTree) {
-                    tree = new Octree(treeLevels, "Resources/Octree", dispatcher);
+                    tree = new Octree();
                     treeThread = new Thread(new ParameterizedThreadStart(BuildTreeThread));
                     Debug.Log("Starting octree thread");
-                    treeThread.Start(new BuildTreeParams(tree, data));
+                    treeThread.Start(new BuildTreeParams(tree, data, dispatcher));
                 }
             }
 
@@ -130,7 +130,7 @@ namespace FastPoints {
 
         static void BuildTreeThread(object obj) {
             BuildTreeParams p = (BuildTreeParams)obj;
-            _ = p.tree.BuildTree(p.data);
+            _ = p.tree.BuildTree(p.data, 3, "Resources/Octree", p.dispatcher);
         }
     }
 }

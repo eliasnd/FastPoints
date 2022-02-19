@@ -31,7 +31,8 @@ namespace FastPoints {
         }
 
         public QueuedWriter(string path) {
-            stream = File.OpenWrite(path);
+            stream = File.Open(path, FileMode.OpenOrCreate, FileAccess.Write, FileShare.ReadWrite);
+            Start();
         }
 
         public QueuedWriter(Stream stream) {
@@ -96,7 +97,7 @@ namespace FastPoints {
             lock (enqueueLock) {
                 p.queue.Enqueue((bytes, pos));
 
-                if (pos != uint.MaxValue) {
+                if (pos == uint.MaxValue) {
                     long ptr =currOffset;
                     currOffset += (long)bytes.Length;
                     return ptr;

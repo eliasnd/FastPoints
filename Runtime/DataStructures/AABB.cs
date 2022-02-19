@@ -12,6 +12,8 @@ namespace FastPoints {
         public Vector3 Min;
         public Vector3 Max;
 
+        public Vector3 Size { get { return Max - Min; } }
+
         public AABB(Vector3 Min, Vector3 Max) {
             this.Min = Min;
             this.Max = Max;
@@ -103,12 +105,28 @@ namespace FastPoints {
             return result;
         }
 
+        public AABB[] Bisect() {
+            AABB[] result = new AABB[8];
+
+            Vector3 mid = Max - (Max - Min) / 2;
+
+            result[0] = new AABB(new Vector3(Min.x, Min.y, Min.z), new Vector3(Min.x, Min.y, mid.z));
+
+            return result;
+        }
+
         public bool InAABB(Vector3 pos) {
             return (
                 Min.x <= pos.x && pos.x <= Max.x &&
                 Min.y <= pos.y && pos.y <= Max.y &&
                 Min.z <= pos.z && pos.z <= Max.z
             );
+        }
+
+        public override bool Equals(object obj)
+        {
+            AABB other = (AABB)obj;
+            return Min == other.Min && Max == other.Max;
         }
 
         public byte[] ToBytes() {
