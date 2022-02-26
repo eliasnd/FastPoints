@@ -32,11 +32,11 @@ namespace FastPoints {
         }
 
         // see https://www.forceflow.be/2013/10/07/morton-encodingdecoding-through-bit-interleaving-implementations/
-        public static ulong MortonEncode(uint x, uint y, uint z)
+        public static int MortonEncode(int x, int y, int z)
         {
             ulong answer = 0;
-            answer |= SplitBy3(x) | SplitBy3(y) << 1 | SplitBy3(z) << 2;
-            return answer;
+            answer |= SplitBy3((uint)x) | SplitBy3((uint)y) << 1 | SplitBy3((uint)z) << 2;
+            return Convert.ToInt32(answer);
         }
     }
 }

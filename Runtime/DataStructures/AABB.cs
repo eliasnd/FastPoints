@@ -11,8 +11,8 @@ namespace FastPoints {
     public struct AABB {
         public Vector3 Min;
         public Vector3 Max;
-
         public Vector3 Size { get { return Max - Min; } }
+        public Vector3 Center { get { return Min + Size * 0.5f; } }
 
         public AABB(Vector3 Min, Vector3 Max) {
             this.Min = Min;
@@ -54,8 +54,7 @@ namespace FastPoints {
                     minZ = Min.z;
                     maxZ = Min.z + zStep;
                     for (int z = 0; z < count; z++) {
-                        result[Convert.ToInt32(Utils.MortonEncode((uint)x, (uint)y, (uint)z))] = new AABB(new Vector3(minX, minY, minZ), new Vector3(maxX, maxY, maxZ));
-                        // result[x, y, z] = new AABB(new Vector3(minX, minY, minZ), new Vector3(maxX, maxY, maxZ));
+                        result[Utils.MortonEncode(z, y, x)] = new AABB(new Vector3(minX, minY, minZ), new Vector3(maxX, maxY, maxZ));
                         minZ = maxZ;
                         maxZ += zStep;
                     }
@@ -66,52 +65,6 @@ namespace FastPoints {
                 maxX += xStep;
             }
              
-            return result;
-        }
-
-        public AABB[,,] Subdivide3(int count) {
-            AABB[,,] result = new AABB[count, count, count];
-
-            float minX, minY, minZ;
-            float maxX, maxY, maxZ;
-            float xStep, yStep, zStep;
-
-            xStep = Mathf.Lerp(Min.x, Max.x, 1f/count) - Min.x;
-            yStep = Mathf.Lerp(Min.y, Max.y, 1f/count) - Min.y;
-            zStep = Mathf.Lerp(Min.z, Max.z, 1f/count) - Min.z;
-
-            minX = Min.x;
-            maxX = Min.x + xStep;
-
-            for (int x = 0; x < count; x++) {
-                minY = Min.y;
-                maxY = Min.y + yStep;
-                for (int y = 0; y < count; y++) {
-                    minZ = Min.z;
-                    maxZ = Min.z + zStep;
-                    for (int z = 0; z < count; z++) {
-                        // result[Convert.ToInt32(Utils.MortonEncode((uint)x, (uint)y, (uint)z))] = new AABB(new Vector3(minX, minY, minZ), new Vector3(maxX, maxY, maxZ));
-                        result[x, y, z] = new AABB(new Vector3(minX, minY, minZ), new Vector3(maxX, maxY, maxZ));
-                        minZ = maxZ;
-                        maxZ += zStep;
-                    }
-                    minY = maxY;
-                    maxY += yStep;
-                }
-                minX = maxX;
-                maxX += xStep;
-            }
-             
-            return result;
-        }
-
-        public AABB[] Bisect() {
-            AABB[] result = new AABB[8];
-
-            Vector3 mid = Max - (Max - Min) / 2;
-
-            result[0] = new AABB(new Vector3(Min.x, Min.y, Min.z), new Vector3(Min.x, Min.y, mid.z));
-
             return result;
         }
 
@@ -146,6 +99,40 @@ namespace FastPoints {
                 maxZBytes[0], maxZBytes[1], maxZBytes[2], maxZBytes[3],
             };
             
+        }
+
+        public override string ToString() {
+            return $"AABB( Min: ({Min.x}, {Min.y}, {Min.z}), Max: ({Max.x}, {Max.y}, {Max.z}) )";
+        }
+
+        public AABB child(int index) {
+            AABB box;
+
+            if ((index & 0b100) == 0) {
+                box.Min.x = Min.x;
+                box.Max.x = Center.x;
+            } else {
+                box.Min.x = Center.x;
+                box.Max.x = Max.x;
+            }
+
+            if ((index & 0b010) == 0) {
+                box.Min.y = Min.y;
+                box.Max.y = Center.y;
+            } else {
+                box.Min.y = Center.y;
+                box.Max.y = Max.y;
+            }
+
+            if ((index & 0b001) == 0) {
+                box.Min.z = Min.z;
+                box.Max.z = Center.z;
+            } else {
+                box.Min.z = Center.z;
+                box.Max.z = Max.z;
+            }
+
+            return box;
         }
     }
 }

@@ -113,7 +113,12 @@ namespace FastPoints {
 
                     Point[] pointBuffer = new Point[node.pointCount];
                     for (int i = 0; i < node.pointCount; i++)
-                        pointBuffer[i] = node.points[indices[i]];
+                        try { 
+                            pointBuffer[i] = node.points[indices[i]];
+                        } catch (Exception e)
+                        {
+                            Debug.Log(e.Message);
+                        }
 
                     node.points = pointBuffer;
                 }

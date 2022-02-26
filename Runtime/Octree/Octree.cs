@@ -109,7 +109,7 @@ namespace FastPoints {
 
             } catch (Exception e)
             {
-                Debug.Log(e.InnerException);
+                Debug.Log($"Exception. Message: {e.Message}, Backtrace: {e.StackTrace}, Inner: {e.InnerException}");
             }
         }
     }
