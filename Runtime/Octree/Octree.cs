@@ -44,14 +44,17 @@ namespace FastPoints {
 
                 // DO INDEXING
 
+                List<Task> indexTasks = new();
+
                 for (int i = 0; i < chunkPaths.Length; i++)
                 {
                     while (idxr.FootprintMB > 1024)
                         Thread.Sleep(50);
 
-                    indexTask = idxr.IndexChunk(data, chunkRoots[i], chunkPaths[i]);
-                    await indexTask;
+                    indexTasks.Add(idxr.IndexChunk(data, chunkRoots[i], chunkPaths[i]));
                 }
+
+                Task.WaitAll(indexTasks.ToArray());
 
                 // CONSTRUCT GLOBAL TREE
 

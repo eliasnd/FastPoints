@@ -84,11 +84,12 @@ namespace FastPoints {
                 curr = curr.child(idx);
             }
 
-
+            uint chunkFootprint = (uint)new FileInfo(chunkPath).Length * 2;
 
             lock (footprintLock)
             {
-                footprint += (uint)new FileInfo(chunkPath).Length * 2;
+                footprint += chunkFootprint;
+                Debug.Log($"Starting chunk {Path.GetFileNameWithoutExtension(chunkPath)} with {chunkFootprint/30} points, footprint now {FootprintMB}");
             }
 
             Point[] points = Point.ToPoints(File.ReadAllBytes(chunkPath));
@@ -104,6 +105,12 @@ namespace FastPoints {
             // }
 
             await IndexPoints(root, points);
+
+            lock (footprintLock)
+            {
+                footprint -= chunkFootprint;
+                Debug.Log($"Finished chunk {Path.GetFileNameWithoutExtension(chunkPath)}, footprint now {FootprintMB}");
+            }
         }
 
         public async Task IndexPoints(Node root, Point[] points) {
@@ -113,7 +120,7 @@ namespace FastPoints {
             currTime = watch.Elapsed;
             
             // DEBUG_CODE
-            Debug.Log(CheckBBox(points, root.bbox));
+            // Debug.Log(CheckBBox(points, root.bbox));
 
             long i2 = watch.ElapsedMilliseconds - currTime.Milliseconds;
             currTime = watch.Elapsed;
@@ -164,80 +171,13 @@ namespace FastPoints {
                 foreach (Point pt in points)
                     sortedNodesCPU[GetChunk(pt)].Add(pt);
 
-                await dispatcher.EnqueueAsync(() => {
-                    // INITIALIZE
-
-                    computeShader = (ComputeShader)Resources.Load("CountAndSort");
-
-                    computeShader.SetInt("_BatchSize", points.Length);
-                    computeShader.SetInt("_NodeCount", gridSize);
-                    computeShader.SetInt("_ThreadBudget", threadBudget);
-                    computeShader.SetFloats("_MinPoint", minPoint);
-                    computeShader.SetFloats("_MaxPoint", maxPoint);
-
-                    ComputeBuffer mortonBuffer = new ComputeBuffer(gridTotal, sizeof(int));
-                    mortonBuffer.SetData(mortonIndices);
-                    computeShader.SetBuffer(computeShader.FindKernel("CountPoints"), "_MortonIndices", mortonBuffer);
-                    computeShader.SetBuffer(computeShader.FindKernel("SortLinear"), "_MortonIndices", mortonBuffer);
-
-                    ComputeBuffer pointBuffer = new ComputeBuffer(points.Length, Point.size);
-                    pointBuffer.SetData(points);
-
-                    // COUNT
-
-                    ComputeBuffer countBuffer = new ComputeBuffer(gridTotal, sizeof(uint));
-
-                    int countHandle = computeShader.FindKernel("CountPoints");
-                    computeShader.SetBuffer(countHandle, "_Points", pointBuffer);
-                    computeShader.SetBuffer(countHandle, "_Counts", countBuffer);
-
-                    computeShader.Dispatch(countHandle, 64, 1, 1);
-
-                    countBuffer.GetData(nodeCounts);
-
-                    nodeStarts[0] = 0;
-                    for (int i = 1; i < nodeStarts.Length; i++)
-                        nodeStarts[i] = nodeStarts[i-1] + nodeCounts[i-1];
-
-                    // SORT
-
-                    ComputeBuffer sortedBuffer = new ComputeBuffer(points.Length, Point.size);
-                    ComputeBuffer startBuffer = new ComputeBuffer(gridTotal, sizeof(uint));
-                    startBuffer.SetData(nodeStarts);
-                    ComputeBuffer offsetBuffer = new ComputeBuffer(gridTotal, sizeof(uint));
-                    uint[] chunkOffsets = new uint[gridTotal];   // Initialize to 0s?
-                    offsetBuffer.SetData(chunkOffsets);
-
-                    int sortHandle = computeShader.FindKernel("SortLinear");  // Sort points into array
-                    computeShader.SetBuffer(sortHandle, "_Points", pointBuffer);
-                    computeShader.SetBuffer(sortHandle, "_SortedPoints", sortedBuffer); // Must output adjacent nodes in order
-                    computeShader.SetBuffer(sortHandle, "_ChunkStarts", startBuffer);
-                    computeShader.SetBuffer(sortHandle, "_ChunkOffsets", offsetBuffer);
-
-                    computeShader.Dispatch(sortHandle, 64, 1, 1);
-
-                    sortedBuffer.GetData(sortedPoints);
-
-                    // SUBSAMPLE EVENTUALLY
-
-                    // CLEAN UP
-
-                    sortedBuffer.Release();
-                    pointBuffer.Release();
-                    startBuffer.Release();
-                    offsetBuffer.Release();
-                    countBuffer.Release();
-                    pointBuffer.Release();
-                }); 
-
                 long i4 = watch.ElapsedMilliseconds - currTime.Milliseconds;
                 currTime = watch.Elapsed;
 
                 // DEBUG_CODE
 
                 for (int i = 0; i < gridTotal; i++)
-                    if (nodeCounts[i] != sortedNodesCPU[i].Count)
-                        Debug.LogError("Count issue!");
+                    nodeCounts[i] = (uint)sortedNodesCPU[i].Count;
 
                 // MAKE SUM PYRAMID
 
@@ -374,7 +314,7 @@ namespace FastPoints {
                                 child.level = nr.level+1;
                                 child.name = nr.name + i;
                                 child.offset = offsetPyramid[nr.level + 1][childIdx+i];
-                                Debug.Log($"Made node {child.name} with level {child.level}, idx {childIdx+i}");
+                                // Debug.Log($"Made node {child.name} with level {child.level}, idx {childIdx+i}");
                                 child.pointCount = count;
                                 // child.bbox = bboxPyramid[nr.level + 1][childIdx+i];
                                 
@@ -450,7 +390,7 @@ namespace FastPoints {
                         Debug.Log("Here");
 
                     node.points = cpuSortedPyramid[nr.level][Utils.MortonEncode(nr.z, nr.y, nr.x)].ToArray();
-                    Debug.Log($"Got points for {node.name} from idx {Utils.MortonEncode(nr.z, nr.y, nr.x)}");
+                    // Debug.Log($"Got points for {node.name} from idx {Utils.MortonEncode(nr.z, nr.y, nr.x)}");
 
                     if (node.points.Length != node.pointCount)
                         Debug.LogError("Biiig!");
