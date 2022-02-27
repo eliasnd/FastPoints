@@ -30,6 +30,8 @@ namespace FastPoints {
             int chunkGridSize = (int)Mathf.Pow(2, chunkDepth-1);
             ComputeBuffer chunkGridBuffer = null;  
 
+            AABB[] testSubdivide = new AABB(new Vector3(0, 0, 0), new Vector3(16, 16, 16)).Subdivide(chunkGridSize);
+
             int threadBudget = Mathf.CeilToInt(batchSize / 4096f);
 
             // Debug.Log("C2");
@@ -76,47 +78,70 @@ namespace FastPoints {
             uint[] testCounts = new uint[chunkGridSize * chunkGridSize * chunkGridSize];
             AABB[] bbs = new AABB(data.MinPoint, data.MaxPoint).Subdivide(chunkGridSize);
 
+            int GetChunk(Point p) {
+                Vector3 size = data.MaxPoint - data.MinPoint;
+
+                float x_norm = (p.pos.x - data.MinPoint.x) / size.x;
+                float y_norm = (p.pos.y - data.MinPoint.y) / size.y;
+                float z_norm = (p.pos.z - data.MinPoint.z) / size.z;
+
+                int x = (int)Mathf.Min(x_norm * chunkGridSize, chunkGridSize-1);
+                int y = (int)Mathf.Min(y_norm * chunkGridSize, chunkGridSize-1);
+                int z = (int)Mathf.Min(z_norm * chunkGridSize, chunkGridSize-1);
+
+                return mortonIndices[x * chunkGridSize * chunkGridSize + y * chunkGridSize + z];
+            }
+
             while (pointsQueued < data.PointCount) {
                 Point[] batch;
                 while (Interlocked.Read(ref activeTasks) > 100 || !readQueue.TryDequeue(out batch))
                     Thread.Sleep(5);
 
                 // DEBUG_CODE
-                bool testPassed = true;
-                if (pointsQueued == 0) {
-                    Debug.Log($"BBox test. Data min point: {data.MinPoint}, max point: {data.MaxPoint}");
-                    (float, float)[] xRanges = bbs.Select((bb) => (bb.Min.x, bb.Max.x)).ToArray();
-                    (float, float)[] yRanges = bbs.Select((bb) => (bb.Min.y, bb.Max.y)).ToArray();;
-                    (float, float)[] zRanges = bbs.Select((bb) => (bb.Min.z, bb.Max.z)).ToArray();;
-                    Debug.Log($"Got inner x ranges {xRanges.ToString()}");
-                    Debug.Log($"Got inner y ranges {yRanges.ToString()}");
-                    Debug.Log($"Got inner z ranges {zRanges.ToString()}");
-                }
-                if (testPassed) { // Test bboxes until one breaks
-                    // BBOX TEST
-                    int GetChunk(Point p) {
-                        float threshold = 1f / chunkGridSize; // Used to calculate which index for each dimension
+                // bool testPassed = true;
+                // if (pointsQueued == 0) {
+                //     Debug.Log($"BBox test. Data min point: {data.MinPoint}, max point: {data.MaxPoint}");
+                //     (float, float)[] xRanges = bbs.Select((bb) => (bb.Min.x, bb.Max.x)).ToArray();
+                //     (float, float)[] yRanges = bbs.Select((bb) => (bb.Min.y, bb.Max.y)).ToArray();;
+                //     (float, float)[] zRanges = bbs.Select((bb) => (bb.Min.z, bb.Max.z)).ToArray();;
+                //     Debug.Log($"Got inner x ranges {xRanges.ToString()}");
+                //     Debug.Log($"Got inner y ranges {yRanges.ToString()}");
+                //     Debug.Log($"Got inner z ranges {zRanges.ToString()}");
+                // }
+                // if (testPassed) { // Test bboxes until one breaks
+                //     // BBOX TEST
+                //     int GetChunk(Point p) {
+                //         float threshold = 1f / chunkGridSize; // Used to calculate which index for each dimension
 
-                        int x = Mathf.Min(Mathf.FloorToInt(Mathf.InverseLerp(data.MinPoint.x, data.MaxPoint.x, p.pos.x) / threshold), chunkGridSize-1);
-                        int y = Mathf.Min(Mathf.FloorToInt(Mathf.InverseLerp(data.MinPoint.y, data.MaxPoint.y, p.pos.y) / threshold), chunkGridSize-1);
-                        int z = Mathf.Min(Mathf.FloorToInt(Mathf.InverseLerp(data.MinPoint.z, data.MaxPoint.z, p.pos.z) / threshold), chunkGridSize-1);
-                        return mortonIndices[x * chunkGridSize * chunkGridSize + y * chunkGridSize + z];
+                //         int x = Mathf.Min(Mathf.FloorToInt(Mathf.InverseLerp(data.MinPoint.x, data.MaxPoint.x, p.pos.x) / threshold), chunkGridSize-1);
+                //         int y = Mathf.Min(Mathf.FloorToInt(Mathf.InverseLerp(data.MinPoint.y, data.MaxPoint.y, p.pos.y) / threshold), chunkGridSize-1);
+                //         int z = Mathf.Min(Mathf.FloorToInt(Mathf.InverseLerp(data.MinPoint.z, data.MaxPoint.z, p.pos.z) / threshold), chunkGridSize-1);
+                //         return mortonIndices[x * chunkGridSize * chunkGridSize + y * chunkGridSize + z];
+                //     }
+
+                //     foreach (Point p in batch) {
+                //         int chunk = GetChunk(p);
+                //         testCounts[chunk]++;
+                //         if (Vector3.Max(bbs[chunk].Max, p.pos) != bbs[chunk].Max || Vector3.Min(bbs[chunk].Min, p.pos) != bbs[chunk].Min) {
+                //             Debug.LogError($@"Found that point {p.pos.ToString()} is in bbox {bbs[chunk].ToString()}.
+                //                 Got x coefficient of {Mathf.InverseLerp(data.MinPoint.x, data.MaxPoint.x, p.pos.x)}, x index of {Mathf.Min(Mathf.FloorToInt(Mathf.InverseLerp(data.MinPoint.x, data.MaxPoint.x, p.pos.x) / (1f/chunkGridSize)), chunkGridSize-1)}
+                //                 Got y coefficient of {Mathf.InverseLerp(data.MinPoint.y, data.MaxPoint.y, p.pos.y)}, y index of {Mathf.Min(Mathf.FloorToInt(Mathf.InverseLerp(data.MinPoint.y, data.MaxPoint.y, p.pos.y) / (1f/chunkGridSize)), chunkGridSize-1)}
+                //                 Got z coefficient of {Mathf.InverseLerp(data.MinPoint.z, data.MaxPoint.z, p.pos.z)}, z index of {Mathf.Min(Mathf.FloorToInt(Mathf.InverseLerp(data.MinPoint.z, data.MaxPoint.z, p.pos.z) / (1f/chunkGridSize)), chunkGridSize-1)}
+                //             ");
+                //             testPassed = false;
+                //         }
+                //     }
+
+                //     Debug.Log(testPassed ? "Test passed" : "Test failed");
+                // }
+
+                foreach (Point pt in batch) {
+                    int c = GetChunk(pt);
+                    if (!bbs[c].InAABB(pt.pos)) {
+                        Debug.LogError("GetChunk issue!");
+                        GetChunk(pt);
                     }
-
-                    foreach (Point p in batch) {
-                        int chunk = GetChunk(p);
-                        testCounts[chunk]++;
-                        if (Vector3.Max(bbs[chunk].Max, p.pos) != bbs[chunk].Max || Vector3.Min(bbs[chunk].Min, p.pos) != bbs[chunk].Min) {
-                            Debug.LogError($@"Found that point {p.pos.ToString()} is in bbox {bbs[chunk].ToString()}.
-                                Got x coefficient of {Mathf.InverseLerp(data.MinPoint.x, data.MaxPoint.x, p.pos.x)}, x index of {Mathf.Min(Mathf.FloorToInt(Mathf.InverseLerp(data.MinPoint.x, data.MaxPoint.x, p.pos.x) / (1f/chunkGridSize)), chunkGridSize-1)}
-                                Got y coefficient of {Mathf.InverseLerp(data.MinPoint.y, data.MaxPoint.y, p.pos.y)}, y index of {Mathf.Min(Mathf.FloorToInt(Mathf.InverseLerp(data.MinPoint.y, data.MaxPoint.y, p.pos.y) / (1f/chunkGridSize)), chunkGridSize-1)}
-                                Got z coefficient of {Mathf.InverseLerp(data.MinPoint.z, data.MaxPoint.z, p.pos.z)}, z index of {Mathf.Min(Mathf.FloorToInt(Mathf.InverseLerp(data.MinPoint.z, data.MaxPoint.z, p.pos.z) / (1f/chunkGridSize)), chunkGridSize-1)}
-                            ");
-                            testPassed = false;
-                        }
-                    }
-
-                    Debug.Log(testPassed ? "Test passed" : "Test failed");
+                    testCounts[c]++;
                 }
 
 
@@ -281,13 +306,10 @@ namespace FastPoints {
 
                         Vector3 min = chunkBBox[i].Min;
                         Vector3 max = chunkBBox[i].Max;
+
                         foreach (Point p in sorted[i])
-                        {
-                            if (Vector3.Min(min, p.pos) != chunkBBox[i].Min)
-                                Debug.LogError($"For chunk {i}, found point {p.pos.ToString()} with expected min of {chunkBBox[i].Min}");
-                            if (Vector3.Max(max, p.pos) != chunkBBox[i].Max)
-                                Debug.LogError($"For chunk {i}, found point {p.pos.ToString()} with expected max of {chunkBBox[i].Max}");
-                        }
+                            if (!chunkBBox[i].InAABB(p.pos))
+                                Debug.LogError($"Chunking found points outside bbox for {chunkPaths[i]}");
 
                         // chunkStreams[i].WriteAsync(Point.ToBytes(sorted[i].ToArray()));
                         chunkWriter.Write(chunkPaths[i], Point.ToBytes(sorted[i].ToArray()));
@@ -308,6 +330,7 @@ namespace FastPoints {
 
                 Point[] batch;
                 while (Interlocked.Read(ref activeTasks) > 100 || !readQueue.TryDequeue(out batch))
+                // while (!readQueue.TryDequeue(out batch))
                     Thread.Sleep(5);
                     // Debug.Log("Waiting on batch from disk");  
 
@@ -334,6 +357,12 @@ namespace FastPoints {
                     sortedBatches.Enqueue((batch, chunkIndices));
                     Interlocked.Decrement(ref activeTasks);
                 });
+
+                // uint[] ptIndices = new uint[batch.Length];
+                // for (int p = 0; p < batch.Length; p++)
+                //     ptIndices[p] = (uint)GetChunk(batch[p]); 
+
+                // sortedBatches.Enqueue((batch, ptIndices));
 
                 pointsToQueue -= batch.Length;
             }

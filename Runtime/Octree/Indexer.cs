@@ -13,6 +13,7 @@ using Debug = UnityEngine.Debug;
 
 namespace FastPoints {
     public class Indexer {
+        bool debug = false;
 
         static int treeDepth = 3;
         static int maxNodeSize = 100000;
@@ -47,73 +48,69 @@ namespace FastPoints {
         }
 
         public async Task IndexChunk(PointCloudData data, Node root, string chunkPath) { 
-            Debug.Log("I0");
+            if (debug)
+                Debug.Log("I0");
 
             // Get BBOX better eventually
             string chunkCode = Path.GetFileNameWithoutExtension(chunkPath);
             AABB curr = new AABB(data.MinPoint, data.MaxPoint);
-
-            // Test bbox subdivide
-            /* AABB[] test1 = curr.Subdivide(8);
-            Queue<AABB> testQueue = new();
-            testQueue.Enqueue(curr);
-            for (int i = 0; i < 3; i++) {
-                for (int b = 0; b < Mathf.Pow(2, i); b++) {
-                    AABB bb = testQueue.Dequeue();
-                    foreach (AABB bbox in bb.Subdivide(2))
-                        testQueue.Enqueue(bbox);
-                }
-            }
-            AABB[] test2 = testQueue.ToArray();
-            int tmp;
-            foreach (AABB bbox in test1) {
-                bool found = false;
-                foreach (AABB bbox2 in test2) {
-                    if (bbox.Equals(bbox2))
-                        found = true;
-                }
-                if (!found)
-                    tmp = 0;
-                else
-                    tmp = 0;
-            } */
-
 
             for (int i = 1; i < chunkCode.Length; i++) {
                 int idx = chunkCode[i] - '0';
                 curr = curr.child(idx);
             }
 
+            curr = new AABB(
+                new Vector3(curr.Min.x-1E-5f, curr.Min.y-1E-5f, curr.Min.z-1E-5f),
+                new Vector3(curr.Max.x+1E-5f, curr.Max.y+1E-5f, curr.Max.z+1E-5f));
+
             uint chunkFootprint = (uint)new FileInfo(chunkPath).Length * 2;
 
             lock (footprintLock)
             {
                 footprint += chunkFootprint;
-                Debug.Log($"Starting chunk {Path.GetFileNameWithoutExtension(chunkPath)} with {chunkFootprint/30} points, footprint now {FootprintMB}");
+                Debug.Log($"Starting chunk {Path.GetFileNameWithoutExtension(chunkPath)} with bbox {curr.ToString()}, {chunkFootprint/30} points, footprint now {FootprintMB}");
             }
 
             Point[] points = Point.ToPoints(File.ReadAllBytes(chunkPath));
 
             // root.bbox = new AABB(new Vector3(curr.Min.x-1E-5f, curr.Min.y-1E-5f, curr.Min.z-1E-5f), new Vector3(curr.Max.x+1E-5f, curr.Max.y+1E-5f, curr.Max.z+1E-5f));
-            root.bbox = new AABB(new Vector3(curr.Min.x, curr.Min.y, curr.Min.z), new Vector3(curr.Max.x, curr.Max.y, curr.Max.z));
+            root.bbox = curr;
             root.name = "n";
-            Debug.Log(chunkPath + ", " + root.bbox.ToString());
+            // Debug.Log(chunkPath + ", " + root.bbox.ToString());
 
-            // foreach (Point pt in points) {
-            //     if (Vector3.Min(root.bbox.Min, pt.pos) != root.bbox.Min || Vector3.Max(root.bbox.Max, pt.pos) != root.bbox.Max)
-            //         Debug.Log("Problem!");
-            // }
+            foreach (Point pt in points) {
+                if (!root.bbox.InAABB(pt.pos))
+                    Debug.LogError($"Chunk at {chunkPath} has point {pt.ToString()} outside bbox!");
+            }
+
+            Stopwatch watch = new();
+            watch.Start();
 
             await IndexPoints(root, points);
+
+            watch.Stop();
 
             lock (footprintLock)
             {
                 footprint -= chunkFootprint;
-                Debug.Log($"Finished chunk {Path.GetFileNameWithoutExtension(chunkPath)}, footprint now {FootprintMB}");
+                Debug.Log($"Finished chunk {Path.GetFileNameWithoutExtension(chunkPath)} in {watch.ElapsedMilliseconds / 1000} seconds, written at offset {root.offset}, footprint now {FootprintMB}");
+                if (FootprintMB == 0)
+                    Debug.Log($"All cleaned up");
             }
+
+            // Debug.Log("Exit");
         }
 
         public async Task IndexPoints(Node root, Point[] points) {
+            if (debug)
+                Debug.Log("I1");
+            try {
+                CheckBBox(points, root.bbox);
+            } catch (Exception e) {
+                Debug.LogError($"Currently at root name {root.name}, error {e.Message}");
+            }
+
             Stopwatch watch = new Stopwatch();
             TimeSpan currTime = new();
             long i1 = watch.ElapsedMilliseconds - currTime.Milliseconds;
@@ -170,6 +167,9 @@ namespace FastPoints {
 
                 foreach (Point pt in points)
                     sortedNodesCPU[GetChunk(pt)].Add(pt);
+
+                if (debug)
+                    Debug.Log("I2");
 
                 long i4 = watch.ElapsedMilliseconds - currTime.Milliseconds;
                 currTime = watch.Elapsed;
@@ -266,9 +266,12 @@ namespace FastPoints {
                     }
                 }
 
-                // for (int l = 0; l < treeDepth; l++)
-                //     for (int n = 0; n < cpuSortedPyramid[l].Length; n++)
-                //         Debug.Log(CheckBBox(cpuSortedPyramid[l][n].ToArray(), bboxPyramid[n][l]));
+                if (debug)
+                    Debug.Log("I3");
+
+                for (int l = 0; l < treeDepth; l++)
+                    for (int n = 0; n < cpuSortedPyramid[l].Length; n++)
+                        CheckBBox(cpuSortedPyramid[l][n].ToArray(), bboxPyramid[l][n]);
 
                 // AABB[][] bboxPyramidAlt = new AABB[treeDepth][];
                 // bboxPyramidAlt[0] = new AABB[] { root.bbox };
@@ -335,6 +338,8 @@ namespace FastPoints {
 
                 long i6 = watch.ElapsedMilliseconds - currTime.Milliseconds;
                 currTime = watch.Elapsed;
+                if (debug)
+                    Debug.Log("I6");
 
                 // CREATE NODES
 
@@ -352,8 +357,8 @@ namespace FastPoints {
                         {
                             Node child = new();
                             // child.bbox = currNode.bbox.Subdivide(2)[idx];
-                            // child.bbox = currNode.bbox.child(idx);
-                            child.bbox = bboxPyramid[nr.level][Utils.MortonEncode(nr.z, nr.y, nr.x)];
+                            child.bbox = currNode.bbox.child(idx);
+                            // child.bbox = bboxPyramid[nr.level][Utils.MortonEncode(nr.z, nr.y, nr.x)];
                             child.name = currNode.name + idx;
                             child.children = new Node[8];
 
@@ -422,32 +427,46 @@ namespace FastPoints {
 
                 // POPULATE INNER NODES
 
+                // void traverse(Node node, Action<Node> cb) {
+                //     foreach (Node child in node.children)
+                //         if (child != null)
+                //             traverse(child, cb);
+                //     cb(node);
+                // }
+
+                // traverse(root, (Node n) => {
+                //     for (int c = 0; c < 8; c++) {
+                //         if (n.children[c] != null)
+                //             if (Vector3.Min(n.children[c].bbox.Min, n.bbox.Min) != n.bbox.Min || Vector3.Max(n.children[c].bbox.Max, n.bbox.Max) != n.bbox.Max)
+                //                 throw new Exception("Issue!");
+                //     }
+                // });
+
                 //await SubsampleNode(root, qw, rand);
                 Sampling.Sample(root, (Node node) => {
                     node.offset = (uint)qw.Enqueue(Point.ToBytes(node.points));
                 });
 
-                void traverse(Node node, Action<Node> cb) {
-                    foreach (Node child in node.children)
-                        if (child != null)
-                            traverse(child, cb);
-                    cb(node);
-                }
+                if (!root.IsLeaf)
+                    Debug.Log("Done sampling");
 
-                traverse(root, (Node n) => { n.children = null; });
+                
+
+                // traverse(root, (Node n) => { n.children = null; });
 
                 long i8 = watch.ElapsedMilliseconds - currTime.Milliseconds;
 
-                Debug.Log($"Call finished. I1 {i1}, I2 {i2}, I3 {i3}, I4 {i4}, I5 {i5}, I6 {i6}, I7 {i7}, I8 {i8}");
+                if (debug)
+                    Debug.Log($"I8");
             });
         }
 
-        string CheckBBox(Point[] points, AABB bbox) {
+        void CheckBBox(Point[] points, AABB bbox) {
             foreach (Point pt in points)
                 if (!bbox.InAABB(pt.pos))
-                    return $"BBox check on {bbox.ToString()} failed on ({pt.pos.x}, {pt.pos.y}, {pt.pos.z})";
+                    throw new Exception($"BBox check on {bbox.ToString()} failed on ({pt.pos.x}, {pt.pos.y}, {pt.pos.z})");
 
-            return $"BBox check on {bbox.ToString()} passed";
+            // return $"BBox check on {bbox.ToString()} passed";
         }
 
         // Subsamples and writes node

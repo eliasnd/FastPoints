@@ -7,6 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Collections.Generic;
 using System.Collections.Concurrent;
+using System.Linq;
 
 using Debug = UnityEngine.Debug;
 
@@ -24,8 +25,11 @@ namespace FastPoints {
                 await data.PopulateBounds();
 
             this.dirPath = dirPath;
+            this.bbox = new AABB(data.MinPoint, data.MaxPoint);
 
             // await Chunker.MakeChunks(data, "Resources/Octree", dispatcher);
+
+            // return;
 
             Task indexTask;
             try {
@@ -51,28 +55,44 @@ namespace FastPoints {
                     while (idxr.FootprintMB > 1024)
                         Thread.Sleep(50);
 
+                    // await idxr.IndexChunk(data, chunkRoots[i], chunkPaths[i]);
                     indexTasks.Add(idxr.IndexChunk(data, chunkRoots[i], chunkPaths[i]));
+                    Debug.Log($"{i} chunks added");
                 }
+
+                Debug.Log("Done adding shit");
 
                 Task.WaitAll(indexTasks.ToArray());
 
                 // CONSTRUCT GLOBAL TREE
 
+                Debug.Log("Constructing global tree");
+
                 Node root = new();
+
+                int d = chunkPaths.Select(p => Path.GetFileNameWithoutExtension(p).Length-1).Max();
+                Debug.Log($"Got depth {d}");
+
+                AABB[][] bboxPyramid = new AABB[chunkDepth+1][];
+                for (int l = 0; l < chunkDepth+1; l++)
+                    bboxPyramid[l] = this.bbox.Subdivide((int)Mathf.Pow(2,l));
 
                 Queue<Node> queue = new();
                 queue.Enqueue(root);
-                for (int l = 0; l < chunkDepth; l++)
+                for (int l = 0; l < chunkDepth+1; l++)
                 {
-                    for (int n = 0; n < (int)Mathf.Pow(2, l); n++)
+                    int n;
+                    for (n = 0; n < (int)Mathf.Pow(8, l); n++)
                     {
                         Node node = queue.Dequeue();
+                        node.bbox = bboxPyramid[l][n];
                         node.children = new Node[8];
                         for (int i = 0; i < 8; i++) { 
                             node.children[i] = new();
                             queue.Enqueue(node.children[i]);
                         }
                     }
+                    Debug.Log($"l{l} with {n} nodes");
                 }
 
                 for (int c = 0; c < chunkPaths.Length; c++)
@@ -82,10 +102,24 @@ namespace FastPoints {
                     for (int i = 0; i < chunkID.Length-1; i++)
                         curr = curr.children[chunkID[i] - '0'];
 
-                    curr.children[chunkID[-1] - '0'] = chunkRoots[c];
+                    curr.children[chunkID[chunkID.Length-1] - '0'] = chunkRoots[c];
+
+                    if (Vector3.Max(curr.bbox.Max, chunkRoots[c].bbox.Max) != curr.bbox.Max || Vector3.Min(curr.bbox.Min, chunkRoots[c].bbox.Min) != curr.bbox.Min)
+                        Debug.LogError("Global issue");
                 }
 
-                await Indexer.SubsampleNode(root, qw, new System.Random());
+                Sampling.Sample(root, (Node node) => {
+                    node.offset = (uint)qw.Enqueue(Point.ToBytes(node.points));
+                });
+
+                void traverse(Node node, Action<Node> cb) {
+                    foreach (Node child in node.children)
+                        if (child != null)
+                            traverse(child, cb);
+                    cb(node);
+                }
+
+                // traverse(root, (Node n) => { n.children = null; });
 
                 List<NodeEntry> nodeList = new();
 
@@ -96,7 +130,8 @@ namespace FastPoints {
                     {
                         pointCount = n.pointCount,
                         offset = n.offset,
-                        descendentCount = 0
+                        descendentCount = 0,
+                        bbox = n.bbox
                     };
 
                     nodeList.Add(entry);
@@ -108,11 +143,20 @@ namespace FastPoints {
                     return entry.descendentCount;
                 }
 
+                AddEntry(root);
+
                 nodes = nodeList.ToArray();
+
+                FileStream fs = File.Create($"{dirPath}/meta.dat");
+                for (int n = 0; n < nodes.Length; n++)
+                    fs.Write(nodes[n].ToBytes());
+
+                Debug.Log("All done");
 
             } catch (Exception e)
             {
                 Debug.Log($"Exception. Message: {e.Message}, Backtrace: {e.StackTrace}, Inner: {e.InnerException}");
+                // Debug.Log(e.InnerExceptions[0].StackTrace);
             }
         }
     }

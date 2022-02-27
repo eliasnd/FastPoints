@@ -138,6 +138,8 @@ namespace FastPoints {
                             continue;
                         }
 
+                        CheckBBox(child.points, node.bbox);
+
                         bool[] acceptedFlags = new bool[(int)child.pointCount];
                         int rejectedCount = 0;
 
@@ -160,7 +162,8 @@ namespace FastPoints {
 
                                 acceptedFlags[i] = isAccepted;
                             } catch (Exception e) {
-                                int tmp = 0;
+                                Debug.Log(e.StackTrace);
+                                // int tmp = 0;
                             }
                         }
 
@@ -199,10 +202,21 @@ namespace FastPoints {
 
                             cb(child);
                         }
+
+                        node.points = accepted.ToArray();
+                        node.pointCount = (uint)acceptedCount;
                     }
                 }
 
             });
+        }
+
+        static void CheckBBox(Point[] points, AABB bbox) {
+            foreach (Point pt in points)
+                if (!bbox.InAABB(pt.pos))
+                    throw new Exception($"BBox check on {bbox.ToString()} failed on ({pt.pos.x}, {pt.pos.y}, {pt.pos.z})");
+
+            // return $"BBox check on {bbox.ToString()} passed";
         }
     }
 }

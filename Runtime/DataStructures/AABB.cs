@@ -36,33 +36,28 @@ namespace FastPoints {
         public AABB[] Subdivide(int count) {
             AABB[] result = new AABB[count * count * count];
 
-            float minX, minY, minZ;
-            float maxX, maxY, maxZ;
-            float xStep, yStep, zStep;
+            double minX, minY, minZ;
+            double maxX, maxY, maxZ;
+            double xStep, yStep, zStep;
 
-            xStep = Mathf.Lerp(Min.x, Max.x, 1f/count) - Min.x;
-            yStep = Mathf.Lerp(Min.y, Max.y, 1f/count) - Min.y;
-            zStep = Mathf.Lerp(Min.z, Max.z, 1f/count) - Min.z;
-
-            minX = Min.x;
-            maxX = Min.x + xStep;
+            xStep = (double)Size.x / count;
+            yStep = (double)Size.y / count;
+            zStep = (double)Size.z / count;
 
             for (int x = 0; x < count; x++) {
-                minY = Min.y;
-                maxY = Min.y + yStep;
+                minX = Min.x + x * xStep;
+                maxX = Min.x + (x+1) * xStep;
                 for (int y = 0; y < count; y++) {
-                    minZ = Min.z;
-                    maxZ = Min.z + zStep;
+                    minY = Min.y + y * yStep;
+                    maxY = Min.y + (y+1) * yStep;
                     for (int z = 0; z < count; z++) {
-                        result[Utils.MortonEncode(z, y, x)] = new AABB(new Vector3(minX, minY, minZ), new Vector3(maxX, maxY, maxZ));
-                        minZ = maxZ;
-                        maxZ += zStep;
+                        minZ = Min.z + z * zStep;
+                        maxZ = Min.z + (z+1) * zStep;
+                        result[Utils.MortonEncode(z, y, x)] = new AABB(
+                            new Vector3((float)(minX-1E-5), (float)(minY-1E-5), (float)(minZ-1E-5)), 
+                            new Vector3((float)(maxX+1E-5), (float)(maxY+1E-5), (float)(maxZ+1E-5)));
                     }
-                    minY = maxY;
-                    maxY += yStep;
                 }
-                minX = maxX;
-                maxX += xStep;
             }
              
             return result;

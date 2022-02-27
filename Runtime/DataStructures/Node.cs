@@ -46,5 +46,16 @@ namespace FastPoints {
         public uint pointCount;
         public uint offset;
         public uint descendentCount;
+        public AABB bbox;
+
+        public byte[] ToBytes() {
+            List<byte> bytes = new();
+            bytes.AddRange(BitConverter.GetBytes(pointCount));
+            bytes.AddRange(BitConverter.GetBytes(offset));
+            bytes.AddRange(BitConverter.GetBytes(descendentCount));
+            bytes.AddRange(bbox.ToBytes());
+
+            return bytes.ToArray();
+        }
     }
 }
