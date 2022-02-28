@@ -57,5 +57,14 @@ namespace FastPoints {
 
             return bytes.ToArray();
         }
+
+        public NodeEntry() {}
+
+        public NodeEntry(byte[] bytes, int startIdx=0) {
+            pointCount = BitConverter.ToUInt32(bytes, startIdx);
+            offset = BitConverter.ToUInt32(bytes, startIdx+4);
+            descendentCount = BitConverter.ToUInt32(bytes, startIdx+8);
+            bbox = new AABB(bytes, startIdx+12);
+        }
     }
 }

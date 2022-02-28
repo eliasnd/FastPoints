@@ -1,4 +1,5 @@
 using UnityEngine;
+using UnityEditor;
 
 using System;
 using System.Collections.Generic;
@@ -10,12 +11,12 @@ using System.Diagnostics;
 using Debug = UnityEngine.Debug;
 
 namespace FastPoints {
-    public class PointCloudData : ScriptableObject {
+    public class PointCloudData : ScriptableObject { // , ISerializationCallbackReceiver {
         
         public PointCloudHandle handle;
-        
+        public Point testPoint;
         public Point[] decimatedCloud;
-        public uint[] chunkCounts;  // ONLY FOR DEVELOPMENT
+        // public uint[] chunkCounts;  // ONLY FOR DEVELOPMENT
 
         [SerializeField]
         int count;
@@ -38,9 +39,23 @@ namespace FastPoints {
         [SerializeField]
         public string TreePath = ""; // True if tree generation is complete; if not, Renderer uses decimated point cloud
         public bool TreeGenerated { get { return TreePath != ""; } }
-
+        [SerializeField]
+        bool boundsPopulated = false;
+        public bool BoundsPopulated { get { return boundsPopulated; } }
 
         public void Initialize() {
+            // count = 10000000;
+            // minPoint = new Vector3(-1,-1,-1);
+            // maxPoint = new Vector3(1,1,1);
+            // testPoint = new Point(new Vector3(-1,-1,-1), new Color(0.5f,0.5f,0.5f));
+            // decimatedCloud = new Point[] {
+            //     new Point(new Vector3(-1,-1,-1), new Color(0f,0f,0f)),
+            //     new Point(new Vector3(0,0,0), new Color(0.5f,0.5f,0.5f)),
+            //     new Point(new Vector3(1,1,1), new Color(1f,1f,1f))
+            // };
+
+            // Debug.Log("Initialize");
+
             BaseStream stream = handle.GetStream();
             count = stream.PointCount;
 
@@ -51,15 +66,18 @@ namespace FastPoints {
         }
 
         public async Task PopulateSparseCloud(int size = 250000) {
+            Debug.Log($"Populating decimated point cloud for {handle.Name}");
             Stopwatch watch = new Stopwatch();
             watch.Start();
             decimatedCloud = new Point[size];
             
             await handle.GetStream().SamplePoints(decimatedCloud.Length, decimatedCloud);
-            
+
             decimatedGenerated = true;
+
+            AssetDatabase.ForceReserializeAssets();
             watch.Stop();
-            Debug.Log($"Decimated cloud loaded in {watch.ElapsedMilliseconds} ms");
+            Debug.Log($"Decimated cloud for {handle.Name} populated in {watch.ElapsedMilliseconds} ms");
         }
 
         public async Task LoadPointBatches(int batchSize, ConcurrentQueue<Point[]> batches) {
@@ -105,6 +123,10 @@ namespace FastPoints {
 
                 Debug.Log($"Preliminarily populated bounds {minPoint.ToString()}, {maxPoint.ToString()}");
             });
+
+            boundsPopulated = true;
+
+            AssetDatabase.ForceReserializeAssets();
         }
     }
 }

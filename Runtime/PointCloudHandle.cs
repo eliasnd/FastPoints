@@ -6,15 +6,16 @@ using System.IO;
 namespace FastPoints {
 
     [Serializable]
-    public class PointCloudHandle {
+    public class PointCloudHandle : ScriptableObject {
         public enum FileType { PLY, LAS, LAZ };
         [SerializeField]
         FileType type;
         public FileType Type { get { return type; } }
         [SerializeField]
         string path;
+        public string Name { get { return Path.GetFileNameWithoutExtension(path); } }
 
-        public PointCloudHandle(string path) {
+        public void Initialize(string path) {
             this.path = path;
 
             switch (Path.GetExtension(path)) {
@@ -30,7 +31,7 @@ namespace FastPoints {
             }
         }
 
-        public PointCloudHandle(string path, FileType type) {
+        public void Initialize(string path, FileType type) {
             this.path = path;
             this.type = type;
         }

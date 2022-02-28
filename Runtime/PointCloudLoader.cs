@@ -17,8 +17,9 @@ namespace FastPoints {
     class PointCloudLoader : MonoBehaviour {
 
         #region public
-        public PointCloudData data;
-        public bool generateTree = true;
+        public PointCloudHandle handle;
+        PointCloudData data;
+        public bool generateTree = false;
         public int decimatedCloudSize = 1000000;
         public float pointSize = 1.5f;
         public int treeLevels = 5;
@@ -30,7 +31,7 @@ namespace FastPoints {
         ComputeShader computeShader;
         Octree tree;
         Thread treeThread;
-        PointCloudData oldData = null;
+        PointCloudHandle oldHandle = null;
 
         public void Awake() {
             dispatcher = new Dispatcher();
@@ -40,7 +41,7 @@ namespace FastPoints {
         public void Reset() {
             dispatcher = new Dispatcher();
             computeShader = (ComputeShader)Resources.Load("CountAndSort");
-            oldData = null;
+            oldHandle = null;
         }
 
         public void Update() {
@@ -52,7 +53,7 @@ namespace FastPoints {
                 dispatcher = new Dispatcher();
             }
 
-            if (data == null) {     // If no data
+            if (handle == null) {     // If no data
                 if (tree != null)
                     ResetTree();
                 return;
@@ -62,7 +63,22 @@ namespace FastPoints {
                 ResetTree();
             }
 
-            if (data != oldData) {  // If new data put in
+            if (handle != oldHandle) {  // If new data put in
+                if (!Directory.Exists($"Assets/FastPointsData"))
+                    Directory.CreateDirectory($"Assets/FastPointsData");
+
+                if (!File.Exists($"Assets/FastPointsData/{handle.Name}.asset")) {  // Create PointCloudData
+                    // Debug.Log("Creating new PointCloudData");
+                    data = ScriptableObject.CreateInstance<PointCloudData>();
+                    data.handle = handle;
+                    AssetDatabase.CreateAsset(data, $"Assets/FastPointsData/{handle.Name}.asset");
+                } else {
+                    // Debug.Log("Getting PointCloudData");
+                    data = AssetDatabase.LoadAssetAtPath<PointCloudData>($"Assets/FastPointsData/{handle.Name}.asset");
+                }
+                
+                // data.PointCount = 10000000;
+                // data.Initialize();
                 if (tree != null) 
                     ResetTree();
 
@@ -71,11 +87,14 @@ namespace FastPoints {
                 if (!data.DecimatedGenerated)
                     _ = data.PopulateSparseCloud(decimatedCloudSize);
 
-                if (generateTree) {
+                if (generateTree && !data.TreeGenerated) {
                     tree = new Octree();
                     treeThread = new Thread(new ParameterizedThreadStart(BuildTreeThread));
                     Debug.Log("Starting octree thread");
-                    treeThread.Start(new BuildTreeParams(tree, data, dispatcher));
+                    string dirPath = $"Resources/FastPointsOctrees/{handle.Name}";
+                    treeThread.Start(new BuildTreeParams(tree, dirPath, data, dispatcher, () => {
+                        data.TreePath = dirPath;
+                    }));
                 }
             }
 
@@ -90,7 +109,7 @@ namespace FastPoints {
             // if (!treeThread.IsAlive)
                 // data.TreePath = "Resources/Octree";
 
-            oldData = data;
+            oldHandle = handle;
         }
 
         public void OnDrawGizmos() {
@@ -108,9 +127,9 @@ namespace FastPoints {
             if (data == null)
                 return;
 
-            if (data.TreeGenerated) {
-                throw new NotImplementedException();
-            } else if (data.DecimatedGenerated) {
+            // if (data.TreeGenerated) {
+            //     throw new NotImplementedException();
+            // } else if (data.DecimatedGenerated) {
                 // Debug.Log($"Point size: {System.Runtime.InteropServices.Marshal.SizeOf<Vector3>()} + {System.Runtime.InteropServices.Marshal.SizeOf<Color>()}");
                 ComputeBuffer cb = new ComputeBuffer(data.decimatedCloud.Length, Point.size);
                 cb.SetData(data.decimatedCloud);
@@ -125,12 +144,12 @@ namespace FastPoints {
                 Graphics.DrawProceduralNow(MeshTopology.Points, decimatedCloudSize, 1);
 
                 cb.Dispose();
-            }
+            // }
         }
 
         static void BuildTreeThread(object obj) {
             BuildTreeParams p = (BuildTreeParams)obj;
-            _ = p.tree.BuildTree(p.data, 3, "Resources/Octree", p.dispatcher);
+            _ = p.tree.BuildTree(p.data, 3, p.dirPath, p.dispatcher, p.cb);
         }
     }
 }

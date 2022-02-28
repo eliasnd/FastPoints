@@ -15,21 +15,31 @@ namespace FastPoints {
     // Class for octree operations
     // Eventually add dynamic level increases like Potree 2.0
 
-    public class Octree : ScriptableObject{
+    public class Octree : ScriptableObject {
         AABB bbox;
         NodeEntry[] nodes;
         string dirPath;
 
-        public async Task BuildTree(PointCloudData data, int treeDepth, string dirPath, Dispatcher dispatcher) {
-            if (data.MinPoint.x >= data.MaxPoint.x || data.MinPoint.y >= data.MaxPoint.y || data.MinPoint.z >= data.MaxPoint.z) 
+        public void ReadTree() {
+            byte[] metaBytes = File.ReadAllBytes($"{dirPath}/meta.dat");
+            for (int i = 0; i < metaBytes.Length / 36; i ++)
+                nodes[i] = new NodeEntry(metaBytes, i * 36);
+        }
+
+        public async Task BuildTree(PointCloudData data, int treeDepth, string dirPath, Dispatcher dispatcher, Action cb) {
+            string name = dirPath.Split(Path.DirectorySeparatorChar)[dirPath.Split(Path.DirectorySeparatorChar).Length-1];
+
+            if (!data.BoundsPopulated) 
                 await data.PopulateBounds();
+
+            Debug.Log($"{name}: Got Bounds");
 
             this.dirPath = dirPath;
             this.bbox = new AABB(data.MinPoint, data.MaxPoint);
 
-            // await Chunker.MakeChunks(data, "Resources/Octree", dispatcher);
+            await Chunker.MakeChunks(data, dirPath, dispatcher);
 
-            // return;
+            Debug.Log($"{name}: Chunking done");
 
             Task indexTask;
             try {
@@ -57,21 +67,23 @@ namespace FastPoints {
 
                     // await idxr.IndexChunk(data, chunkRoots[i], chunkPaths[i]);
                     indexTasks.Add(idxr.IndexChunk(data, chunkRoots[i], chunkPaths[i]));
-                    Debug.Log($"{i} chunks added");
+                    // Debug.Log($"{i} chunks added");
                 }
 
-                Debug.Log("Done adding shit");
+                // Debug.Log("Done adding shit");
 
                 Task.WaitAll(indexTasks.ToArray());
 
+                Debug.Log($"{name}: Indexing done");
+
                 // CONSTRUCT GLOBAL TREE
 
-                Debug.Log("Constructing global tree");
+                // Debug.Log("Constructing global tree");
 
                 Node root = new();
 
                 int d = chunkPaths.Select(p => Path.GetFileNameWithoutExtension(p).Length-1).Max();
-                Debug.Log($"Got depth {d}");
+                // Debug.Log($"Got depth {d}");
 
                 AABB[][] bboxPyramid = new AABB[chunkDepth+1][];
                 for (int l = 0; l < chunkDepth+1; l++)
@@ -92,7 +104,7 @@ namespace FastPoints {
                             queue.Enqueue(node.children[i]);
                         }
                     }
-                    Debug.Log($"l{l} with {n} nodes");
+                    // Debug.Log($"l{l} with {n} nodes");
                 }
 
                 for (int c = 0; c < chunkPaths.Length; c++)
@@ -104,8 +116,8 @@ namespace FastPoints {
 
                     curr.children[chunkID[chunkID.Length-1] - '0'] = chunkRoots[c];
 
-                    if (Vector3.Max(curr.bbox.Max, chunkRoots[c].bbox.Max) != curr.bbox.Max || Vector3.Min(curr.bbox.Min, chunkRoots[c].bbox.Min) != curr.bbox.Min)
-                        Debug.LogError("Global issue");
+                    // if (Vector3.Max(curr.bbox.Max, chunkRoots[c].bbox.Max) != curr.bbox.Max || Vector3.Min(curr.bbox.Min, chunkRoots[c].bbox.Min) != curr.bbox.Min)
+                    //     Debug.LogError("Global issue");
                 }
 
                 Sampling.Sample(root, (Node node) => {
@@ -151,8 +163,9 @@ namespace FastPoints {
                 for (int n = 0; n < nodes.Length; n++)
                     fs.Write(nodes[n].ToBytes());
 
-                Debug.Log("All done");
-
+                Debug.Log($"{name}: Stitching done");
+                cb();
+                Debug.Log($"{name}: All done");
             } catch (Exception e)
             {
                 Debug.Log($"Exception. Message: {e.Message}, Backtrace: {e.StackTrace}, Inner: {e.InnerException}");
@@ -165,10 +178,14 @@ namespace FastPoints {
         public Octree tree;
         public PointCloudData data;
         public Dispatcher dispatcher;
-        public BuildTreeParams(Octree tree, PointCloudData data, Dispatcher dispatcher) {
+        public string dirPath;
+        public Action cb;
+        public BuildTreeParams(Octree tree, string dirPath, PointCloudData data, Dispatcher dispatcher, Action cb) {
             this.tree = tree;
+            this.dirPath = dirPath;
             this.data = data;
             this.dispatcher = dispatcher;
+            this.cb = cb;
         }
     }
 }

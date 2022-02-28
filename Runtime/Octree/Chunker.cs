@@ -14,7 +14,7 @@ namespace FastPoints {
         static int maxChunkSize = 10000000;
 
         public static async Task MakeChunks(PointCloudData data, string targetDir, Dispatcher dispatcher) {
-            Debug.Log("C1");
+            // Debug.Log("C1");
             ComputeShader computeShader = null;
             ConcurrentQueue<Point[]> readQueue = new ConcurrentQueue<Point[]>();
 
@@ -65,7 +65,7 @@ namespace FastPoints {
                 computeShader.SetInt("_ThreadBudget", threadBudget);
             });
 
-            Debug.Log("C3");
+            // Debug.Log("C3");
 
             // COUNTING
 
@@ -135,12 +135,15 @@ namespace FastPoints {
                 //     Debug.Log(testPassed ? "Test passed" : "Test failed");
                 // }
 
+                AABB bigbox = new AABB(data.MinPoint, data.MaxPoint);
                 foreach (Point pt in batch) {
+                    if (!bigbox.InAABB(pt.pos))
+                        Debug.Log("Bounds issue!");
                     int c = GetChunk(pt);
-                    if (!bbs[c].InAABB(pt.pos)) {
-                        Debug.LogError("GetChunk issue!");
-                        GetChunk(pt);
-                    }
+                    // if (!bbs[c].InAABB(pt.pos)) {
+                    //     Debug.LogError("GetChunk issue!");
+                    //     GetChunk(pt);
+                    // }
                     testCounts[c]++;
                 }
 
@@ -176,13 +179,13 @@ namespace FastPoints {
             await dispatcher.EnqueueAsync(() => { chunkGridBuffer.GetData(leafCounts); chunkGridBuffer.Release(); });
 
             // DEBUG_CODE
-            for (int i = 0; i < chunkGridSize * chunkGridSize * chunkGridSize; i++)
-                if (leafCounts[i] != testCounts[i])
-                    Debug.LogError($"Chunk {i} with bbox {bbs[i]} had cpu count {testCounts[i]}, gpu count {leafCounts[i]}");
+            // for (int i = 0; i < chunkGridSize * chunkGridSize * chunkGridSize; i++)
+            //     if (leafCounts[i] != testCounts[i])
+            //         Debug.LogError($"Chunk {i} with bbox {bbs[i]} had cpu count {testCounts[i]}, gpu count {leafCounts[i]}");
 
             // Debug.Log("Test done");
 
-            Debug.Log("C4");
+            // Debug.Log("C4");
 
             uint sum = 0;
             for (int i = 0; i < leafCounts.Length; i++)
@@ -216,7 +219,7 @@ namespace FastPoints {
                 sumPyramid[level] = currLevel;
             }
 
-            Debug.Log("C5");
+            // Debug.Log("C5");
 
             // MAKE LUT
 
@@ -263,11 +266,11 @@ namespace FastPoints {
 
             AddToLUT(0, 0, 0, 0);
 
-            Debug.Log("C6");
+            // Debug.Log("C6");
 
-            Debug.Log("Chunks are:");
-            for (int i = 0; i < chunkPaths.Count; i++)
-                Debug.Log($"Chunk {i} at path {chunkPaths[i]} with bbox {chunkBBox[i].ToString()}");
+            // Debug.Log("Chunks are:");
+            // for (int i = 0; i < chunkPaths.Count; i++)
+            //     Debug.Log($"Chunk {i} at path {chunkPaths[i]} with bbox {chunkBBox[i].ToString()}");
 
             // throw new Exception();
 
@@ -320,7 +323,7 @@ namespace FastPoints {
                 }
             });
 
-            Debug.Log("C7");
+            // Debug.Log("C7");
 
             // SORT POINTS
 
@@ -336,42 +339,42 @@ namespace FastPoints {
 
                 uint[] chunkIndices = new uint[batch.Length];             
 
-                Interlocked.Increment(ref activeTasks);
-                dispatcher.Enqueue(() => {
-                    ComputeBuffer batchBuffer = new ComputeBuffer(batchSize, Point.size);
-                    batchBuffer.SetData(batch);
+                // Interlocked.Increment(ref activeTasks);
+                // dispatcher.Enqueue(() => {
+                //     ComputeBuffer batchBuffer = new ComputeBuffer(batchSize, Point.size);
+                //     batchBuffer.SetData(batch);
 
-                    ComputeBuffer sortedBuffer = new ComputeBuffer(batchSize, sizeof(uint));
+                //     ComputeBuffer sortedBuffer = new ComputeBuffer(batchSize, sizeof(uint));
 
-                    int sortHandle = computeShader.FindKernel("SortPoints");
-                    computeShader.SetBuffer(sortHandle, "_Points", batchBuffer);
-                    computeShader.SetBuffer(sortHandle, "_ChunkIndices", sortedBuffer);
-                    computeShader.SetInt("_BatchSize", batch.Length);
-                    computeShader.Dispatch(sortHandle, 64, 1, 1);
+                //     int sortHandle = computeShader.FindKernel("SortPoints");
+                //     computeShader.SetBuffer(sortHandle, "_Points", batchBuffer);
+                //     computeShader.SetBuffer(sortHandle, "_ChunkIndices", sortedBuffer);
+                //     computeShader.SetInt("_BatchSize", batch.Length);
+                //     computeShader.Dispatch(sortHandle, 64, 1, 1);
 
-                    batchBuffer.Release();
+                //     batchBuffer.Release();
 
-                    sortedBuffer.GetData(chunkIndices);
-                    sortedBuffer.Release();
+                //     sortedBuffer.GetData(chunkIndices);
+                //     sortedBuffer.Release();
 
-                    sortedBatches.Enqueue((batch, chunkIndices));
-                    Interlocked.Decrement(ref activeTasks);
-                });
+                //     sortedBatches.Enqueue((batch, chunkIndices));
+                //     Interlocked.Decrement(ref activeTasks);
+                // });
 
-                // uint[] ptIndices = new uint[batch.Length];
-                // for (int p = 0; p < batch.Length; p++)
-                //     ptIndices[p] = (uint)GetChunk(batch[p]); 
+                uint[] ptIndices = new uint[batch.Length];
+                for (int p = 0; p < batch.Length; p++)
+                    ptIndices[p] = (uint)GetChunk(batch[p]); 
 
-                // sortedBatches.Enqueue((batch, ptIndices));
+                sortedBatches.Enqueue((batch, ptIndices));
 
                 pointsToQueue -= batch.Length;
             }
 
-            Debug.Log("C8");
+            // Debug.Log("C8");
 
             await writeChunksTask;
 
-            Debug.Log("C9");
+            // Debug.Log("C9");
         }
 
         static string ToNodeID(int level, int gridSize, int x, int y, int z) {
