@@ -61,8 +61,8 @@ namespace FastPoints {
             }
 
             curr = new AABB(
-                new Vector3(curr.Min.x-1E-5f, curr.Min.y-1E-5f, curr.Min.z-1E-5f),
-                new Vector3(curr.Max.x+1E-5f, curr.Max.y+1E-5f, curr.Max.z+1E-5f));
+                new Vector3(curr.Min.x-1E-3f, curr.Min.y-1E-3f, curr.Min.z-1E-3f),
+                new Vector3(curr.Max.x+1E-3f, curr.Max.y+1E-3f, curr.Max.z+1E-3f));
 
             uint chunkFootprint = (uint)new FileInfo(chunkPath).Length * 2;
 

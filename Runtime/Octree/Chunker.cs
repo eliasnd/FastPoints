@@ -78,96 +78,35 @@ namespace FastPoints {
             uint[] testCounts = new uint[chunkGridSize * chunkGridSize * chunkGridSize];
             AABB[] bbs = new AABB(data.MinPoint, data.MaxPoint).Subdivide(chunkGridSize);
 
-            int GetChunk(Point p) {
-                Vector3 size = data.MaxPoint - data.MinPoint;
+            int threadCount = 10;
+            Thread[] countThreads = new Thread[threadCount];
+            CountThreadParams[] threadParams = new CountThreadParams[threadCount];
+            object counterLock = new();
 
-                float x_norm = (p.pos.x - data.MinPoint.x) / size.x;
-                float y_norm = (p.pos.y - data.MinPoint.y) / size.y;
-                float z_norm = (p.pos.z - data.MinPoint.z) / size.z;
+            uint pointsToCount = (uint)data.PointCount;
 
-                int x = (int)Mathf.Min(x_norm * chunkGridSize, chunkGridSize-1);
-                int y = (int)Mathf.Min(y_norm * chunkGridSize, chunkGridSize-1);
-                int z = (int)Mathf.Min(z_norm * chunkGridSize, chunkGridSize-1);
-
-                return mortonIndices[x * chunkGridSize * chunkGridSize + y * chunkGridSize + z];
+            for (int i = 0; i < threadCount; i++) {
+                countThreads[i] = new Thread(new ParameterizedThreadStart(CountThread));
+                threadParams[i] = new CountThreadParams(readQueue, new AABB(data.MinPoint, data.MaxPoint), mortonIndices, counterLock, testCounts, (uint batchSize) => {
+                    pointsToCount -= batchSize;
+                    Debug.Log($"Points counted: {data.PointCount - pointsToCount}");
+                }, 3);
+                countThreads[i].Start(threadParams[i]);
             }
 
-            while (pointsQueued < data.PointCount) {
-                Point[] batch;
-                while (Interlocked.Read(ref activeTasks) > 100 || !readQueue.TryDequeue(out batch))
-                    Thread.Sleep(5);
+            while (pointsToCount > 0)
+                Thread.Sleep(300);
 
-                // DEBUG_CODE
-                // bool testPassed = true;
-                // if (pointsQueued == 0) {
-                //     Debug.Log($"BBox test. Data min point: {data.MinPoint}, max point: {data.MaxPoint}");
-                //     (float, float)[] xRanges = bbs.Select((bb) => (bb.Min.x, bb.Max.x)).ToArray();
-                //     (float, float)[] yRanges = bbs.Select((bb) => (bb.Min.y, bb.Max.y)).ToArray();;
-                //     (float, float)[] zRanges = bbs.Select((bb) => (bb.Min.z, bb.Max.z)).ToArray();;
-                //     Debug.Log($"Got inner x ranges {xRanges.ToString()}");
-                //     Debug.Log($"Got inner y ranges {yRanges.ToString()}");
-                //     Debug.Log($"Got inner z ranges {zRanges.ToString()}");
-                // }
-                // if (testPassed) { // Test bboxes until one breaks
-                //     // BBOX TEST
-                //     int GetChunk(Point p) {
-                //         float threshold = 1f / chunkGridSize; // Used to calculate which index for each dimension
-
-                //         int x = Mathf.Min(Mathf.FloorToInt(Mathf.InverseLerp(data.MinPoint.x, data.MaxPoint.x, p.pos.x) / threshold), chunkGridSize-1);
-                //         int y = Mathf.Min(Mathf.FloorToInt(Mathf.InverseLerp(data.MinPoint.y, data.MaxPoint.y, p.pos.y) / threshold), chunkGridSize-1);
-                //         int z = Mathf.Min(Mathf.FloorToInt(Mathf.InverseLerp(data.MinPoint.z, data.MaxPoint.z, p.pos.z) / threshold), chunkGridSize-1);
-                //         return mortonIndices[x * chunkGridSize * chunkGridSize + y * chunkGridSize + z];
-                //     }
-
-                //     foreach (Point p in batch) {
-                //         int chunk = GetChunk(p);
-                //         testCounts[chunk]++;
-                //         if (Vector3.Max(bbs[chunk].Max, p.pos) != bbs[chunk].Max || Vector3.Min(bbs[chunk].Min, p.pos) != bbs[chunk].Min) {
-                //             Debug.LogError($@"Found that point {p.pos.ToString()} is in bbox {bbs[chunk].ToString()}.
-                //                 Got x coefficient of {Mathf.InverseLerp(data.MinPoint.x, data.MaxPoint.x, p.pos.x)}, x index of {Mathf.Min(Mathf.FloorToInt(Mathf.InverseLerp(data.MinPoint.x, data.MaxPoint.x, p.pos.x) / (1f/chunkGridSize)), chunkGridSize-1)}
-                //                 Got y coefficient of {Mathf.InverseLerp(data.MinPoint.y, data.MaxPoint.y, p.pos.y)}, y index of {Mathf.Min(Mathf.FloorToInt(Mathf.InverseLerp(data.MinPoint.y, data.MaxPoint.y, p.pos.y) / (1f/chunkGridSize)), chunkGridSize-1)}
-                //                 Got z coefficient of {Mathf.InverseLerp(data.MinPoint.z, data.MaxPoint.z, p.pos.z)}, z index of {Mathf.Min(Mathf.FloorToInt(Mathf.InverseLerp(data.MinPoint.z, data.MaxPoint.z, p.pos.z) / (1f/chunkGridSize)), chunkGridSize-1)}
-                //             ");
-                //             testPassed = false;
-                //         }
-                //     }
-
-                //     Debug.Log(testPassed ? "Test passed" : "Test failed");
-                // }
-
-                AABB bigbox = new AABB(data.MinPoint, data.MaxPoint);
-                foreach (Point pt in batch) {
-                    if (!bigbox.InAABB(pt.pos))
-                        Debug.Log("Bounds issue!");
-                    int c = GetChunk(pt);
-                    // if (!bbs[c].InAABB(pt.pos)) {
-                    //     Debug.LogError("GetChunk issue!");
-                    //     GetChunk(pt);
-                    // }
-                    testCounts[c]++;
+            for (int i = 0; i < threadCount; i++) {
+                lock (threadParams[i].paramsLock) {
+                    threadParams[i].stopSignal = true;
                 }
-
-
-                Interlocked.Increment(ref activeTasks);
-                dispatcher.Enqueue(() => {
-                    ComputeBuffer batchBuffer = new ComputeBuffer(batch.Length, Point.size);
-                    batchBuffer.SetData(batch);
-
-                    computeShader.SetBuffer(computeShader.FindKernel("CountPoints"), "_Counts", chunkGridBuffer);
-
-                    int countHandle = computeShader.FindKernel("CountPoints");
-                    computeShader.SetBuffer(countHandle, "_Points", batchBuffer);
-                    computeShader.SetInt("_BatchSize", batch.Length);
-                    computeShader.Dispatch(countHandle, 64, 1, 1);
-
-                    batchBuffer.Release();
-                    pointsCounted += batch.Length;
-                    Interlocked.Decrement(ref activeTasks);
-                });
-
-                pointsQueued += batch.Length;
-                Debug.Log($"{pointsQueued} points queued");
             }
+
+            for (int i = 0; i < threadCount; i++)
+                countThreads[i].Join();
+
+            Debug.Log("Joined");
 
             readQueue.Clear();
             _ = data.LoadPointBatches(batchSize, readQueue);   // Start loading to get head start while merging
@@ -175,8 +114,10 @@ namespace FastPoints {
             while (Interlocked.Read(ref activeTasks) > 0)
                 Thread.Sleep(10);
 
-            uint[] leafCounts = new uint[chunkGridSize * chunkGridSize * chunkGridSize];
-            await dispatcher.EnqueueAsync(() => { chunkGridBuffer.GetData(leafCounts); chunkGridBuffer.Release(); });
+            // uint[] leafCounts = new uint[chunkGridSize * chunkGridSize * chunkGridSize];
+            // await dispatcher.EnqueueAsync(() => { chunkGridBuffer.GetData(leafCounts); chunkGridBuffer.Release(); });
+
+            uint[] leafCounts = testCounts;
 
             // DEBUG_CODE
             // for (int i = 0; i < chunkGridSize * chunkGridSize * chunkGridSize; i++)
@@ -268,9 +209,9 @@ namespace FastPoints {
 
             // Debug.Log("C6");
 
-            // Debug.Log("Chunks are:");
-            // for (int i = 0; i < chunkPaths.Count; i++)
-            //     Debug.Log($"Chunk {i} at path {chunkPaths[i]} with bbox {chunkBBox[i].ToString()}");
+            Debug.Log("Chunks are:");
+            for (int i = 0; i < chunkPaths.Count; i++)
+                Debug.Log($"Chunk {i} at path {chunkPaths[i]} with bbox {chunkBBox[i].ToString()}");
 
             // throw new Exception();
 
@@ -313,7 +254,11 @@ namespace FastPoints {
                         foreach (Point p in sorted[i])
                             if (!chunkBBox[i].InAABB(p.pos))
                                 Debug.LogError($"Chunking found points outside bbox for {chunkPaths[i]}");
-
+                            else if (i == 76 && p.pos.x - 8.98805f < 0.00001f && p.pos.y - 0.3535893f < 0.00001f && p.pos.z - -1.575418f < 0.00001f) {
+                                Debug.Log("Heretest");
+                                float z_diff = p.pos.z - -1.575418f;
+                                chunkBBox[i].InAABB(p.pos);
+                            }
                         // chunkStreams[i].WriteAsync(Point.ToBytes(sorted[i].ToArray()));
                         chunkWriter.Write(chunkPaths[i], Point.ToBytes(sorted[i].ToArray()));
                         sorted[i].Clear();
@@ -326,6 +271,20 @@ namespace FastPoints {
             // Debug.Log("C7");
 
             // SORT POINTS
+
+            int GetChunk(Point p) {
+                Vector3 size = data.MaxPoint - data.MinPoint;
+
+                float x_norm = (p.pos.x - data.MinPoint.x) / size.x;
+                float y_norm = (p.pos.y - data.MinPoint.y) / size.y;
+                float z_norm = (p.pos.z - data.MinPoint.z) / size.z;
+
+                int x = (int)Mathf.Min(x_norm * chunkGridSize, chunkGridSize-1);
+                int y = (int)Mathf.Min(y_norm * chunkGridSize, chunkGridSize-1);
+                int z = (int)Mathf.Min(z_norm * chunkGridSize, chunkGridSize-1);
+
+                return mortonIndices[x * chunkGridSize * chunkGridSize + y * chunkGridSize + z];
+            }
 
             int pointsToQueue = data.PointCount;
             while (pointsToQueue > 0) {
@@ -411,5 +370,89 @@ namespace FastPoints {
 
 		    return id;
 	    }
+
+        static void CountThread(object obj) {
+            CountThreadParams p = (CountThreadParams)obj;
+
+            int gridSize = (int)Mathf.Pow(p.counter.Length, 1/3f);
+            uint[] localCounter;
+
+            void FlushCounter() {
+                lock (p.counterLock) {
+                    uint localSum = 0;
+                    uint sum = 0;
+
+                    for (int i = 0; i < p.counter.Length; i++) {
+                        p.counter[i] += localCounter[i];
+                        localSum += localCounter[i];
+                        sum += p.counter[i];
+                    }
+
+                    // Debug.Log($"Flushed {localSum}, p.counter now has size {sum}");
+
+                    
+                }
+            }
+
+            int GetChunk(Point pt) {
+                Vector3 size = p.bbox.Size;
+
+                float x_norm = (pt.pos.x - p.bbox.Min.x) / size.x;
+                float y_norm = (pt.pos.y - p.bbox.Min.y) / size.y;
+                float z_norm = (pt.pos.z - p.bbox.Min.z) / size.z;
+
+                int x = (int)Mathf.Min(x_norm * gridSize, gridSize-1);
+                int y = (int)Mathf.Min(y_norm * gridSize, gridSize-1);
+                int z = (int)Mathf.Min(z_norm * gridSize, gridSize-1);
+
+                return p.mortonIndices[x * gridSize * gridSize + y * gridSize + z];
+            }
+            
+            while (true) {
+                localCounter = new uint[p.counter.Length];
+                for (int i = 0; i < p.flushRate; i++) {
+                    Point[] batch;
+                    while (!p.batches.TryDequeue(out batch)) {
+                        lock (p.paramsLock) {
+                            if (p.stopSignal) {
+                                FlushCounter();
+                                return;
+                            }
+                        }
+                        Thread.Sleep(50);
+                    }
+
+                    for (int j = 0; j < batch.Length; j++)
+                        localCounter[GetChunk(batch[j])]++;
+
+                    p.countCallback((uint)batch.Length);
+                }
+
+                FlushCounter();
+            }   
+        }
+    }
+
+    class CountThreadParams {
+        public ConcurrentQueue<Point[]> batches;
+        public object counterLock;
+        public object paramsLock;
+        public uint[] counter;
+        public int[] mortonIndices;
+        public AABB bbox;
+        public int flushRate;
+        public bool stopSignal;
+        public Action<uint> countCallback;
+        public CountThreadParams(ConcurrentQueue<Point[]> batches, AABB bbox, int[] mortonIndices, object counterLock, uint[] counter, Action<uint> countCallback, int flushRate = 1) {
+            this.batches = batches;
+            this.mortonIndices = mortonIndices;
+            this.bbox = bbox;
+            this.counterLock = counterLock;
+            this.counter = counter;
+            this.flushRate = flushRate;
+            this.stopSignal = false;
+            this.countCallback = countCallback;
+            this.paramsLock = new object();
+        }
     }
 }

@@ -19,7 +19,7 @@ namespace FastPoints {
         #region public
         public PointCloudHandle handle;
         PointCloudData data;
-        public bool generateTree = false;
+        public bool generateTree = true;
         public int decimatedCloudSize = 1000000;
         public float pointSize = 1.5f;
         public int treeLevels = 5;
