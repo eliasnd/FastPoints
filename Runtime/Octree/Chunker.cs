@@ -234,6 +234,8 @@ namespace FastPoints {
 
                 int pointsToWrite = data.PointCount;
 
+                List<Point> r245Points = new List<Point>();
+
                 while (pointsToWrite > 0) {
                     (Point[] batch, uint[] indices) tup;
                     while (!sortedBatches.TryDequeue(out tup))
@@ -251,14 +253,19 @@ namespace FastPoints {
                         Vector3 min = chunkBBox[i].Min;
                         Vector3 max = chunkBBox[i].Max;
 
-                        foreach (Point p in sorted[i])
+                        foreach (Point p in sorted[i]) {
                             if (!chunkBBox[i].InAABB(p.pos))
                                 Debug.LogError($"Chunking found points outside bbox for {chunkPaths[i]}");
-                            else if (i == 76 && p.pos.x - 8.98805f < 0.00001f && p.pos.y - 0.3535893f < 0.00001f && p.pos.z - -1.575418f < 0.00001f) {
+                            else if (i == 76 && Mathf.Abs(p.pos.x - 8.98805f) < 0.00001f && Mathf.Abs(p.pos.y - 0.3535893f) < 0.00001f && Mathf.Abs(p.pos.z - -1.575418f) < 0.0001f) {
                                 Debug.Log("Heretest");
                                 float z_diff = p.pos.z - -1.575418f;
                                 chunkBBox[i].InAABB(p.pos);
                             }
+
+                            if (Path.GetFileNameWithoutExtension(chunkPaths[i]) == "r245")
+                                r245Points.Add(p);
+
+                        }
                         // chunkStreams[i].WriteAsync(Point.ToBytes(sorted[i].ToArray()));
                         chunkWriter.Write(chunkPaths[i], Point.ToBytes(sorted[i].ToArray()));
                         sorted[i].Clear();
@@ -266,6 +273,10 @@ namespace FastPoints {
 
                     pointsToWrite -= tup.batch.Length;
                 }
+
+                r245Points.Sort();
+                foreach (Point pt in r245Points)
+                    Debug.Log($"r245: {pt.ToString()}");
             });
 
             // Debug.Log("C7");

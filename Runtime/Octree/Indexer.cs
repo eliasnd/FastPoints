@@ -74,6 +74,14 @@ namespace FastPoints {
 
             Point[] points = Point.ToPoints(File.ReadAllBytes(chunkPath));
 
+            if (Path.GetFileNameWithoutExtension(chunkPath) == "r245") {
+                List<Point> ptList = new(points);
+                ptList.Sort();
+                foreach (Point pt in ptList)
+                    Debug.Log($"Read r245: {pt.ToString()}");
+
+            }
+
             // root.bbox = new AABB(new Vector3(curr.Min.x-1E-5f, curr.Min.y-1E-5f, curr.Min.z-1E-5f), new Vector3(curr.Max.x+1E-5f, curr.Max.y+1E-5f, curr.Max.z+1E-5f));
             root.bbox = curr;
             root.name = "n";

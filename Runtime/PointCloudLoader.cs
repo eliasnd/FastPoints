@@ -42,6 +42,8 @@ namespace FastPoints {
             dispatcher = new Dispatcher();
             computeShader = (ComputeShader)Resources.Load("CountAndSort");
             oldHandle = null;
+            if (treeThread != null)
+                treeThread.Abort();
         }
 
         public void Update() {
