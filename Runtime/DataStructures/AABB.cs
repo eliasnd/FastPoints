@@ -2,6 +2,7 @@ using UnityEngine;
 
 using System;
 using System.Runtime.InteropServices;
+using System.Linq;
 
 
 
@@ -31,6 +32,44 @@ namespace FastPoints {
                 BitConverter.ToSingle(bytes, startIdx+16),
                 BitConverter.ToSingle(bytes, startIdx+20)
             );
+        }
+
+        public Bounds AsBounds() {
+            return new Bounds(Center, Size);
+        }
+
+        // Gets AABB from this AABB with transformation applied
+        public AABB Transform(Matrix4x4 mat) {
+            Vector3[] corners = new Vector3[] {
+                Min, new Vector3(Min.x, Min.y, Max.z),
+                new Vector3(Min.x, Max.y, Min.z), new Vector3(Min.x, Max.y, Max.z),
+                new Vector3(Max.x, Min.y, Min.z), new Vector3(Max.x, Min.y, Min.z),
+                new Vector3(Max.x, Max.y, Min.z), new Vector3(Max.x, Max.y, Max.z),
+            }.Select(vec => mat.MultiplyVector(vec)).ToArray();
+
+            Vector3 newMin = new Vector3(float.MaxValue, float.MaxValue, float.MaxValue);
+            Vector3 newMax = new Vector3(float.MinValue, float.MinValue, float.MinValue);
+
+            foreach (Vector3 vec in corners) {
+                newMin = Vector3.Min(newMin, vec);
+                newMax = Vector3.Max(newMax, vec);
+            }
+
+            return new AABB(newMin, newMax);
+        }
+
+        // Get planes from frustum with GeometryUtil.CalculateFrustumPlanes(Camera cam)
+        public bool Intersects(Plane[] planes) {
+            return Utils.TestPlanesAABB(planes, AsBounds());
+        }
+
+        public Rect ToScreenRect(Matrix4x4 mat) {
+            Vector3 origin = Utils.WorldToScreenPoint(new Vector3(Min.x, Max.y, 0f), mat);
+            Vector3 extent = Utils.WorldToScreenPoint(new Vector3(Max.x, Min.y, 0f), mat);
+     
+            // Create rect in screen space and return - does not account for camera perspective
+            // Rect coordinates are range [0, 1] x [0, 1]
+            return new Rect(origin.x, 1 - origin.y, extent.x - origin.x, origin.y - extent.y);
         }
 
         public AABB[] Subdivide(int count) {

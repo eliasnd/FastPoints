@@ -17,63 +17,80 @@ namespace FastPoints {
 
     public class Octree : ScriptableObject {
         AABB bbox;
-        NodeEntry[] nodes;
-        string dirPath;
+        public NodeEntry[] nodes = null;
+        public bool Loaded { get { return nodes != null; } }
+        public string dirPath { get; private set; }
+        public FileStream fs;
+
+        public Node root;
+
+        public Octree(string dirPath) {
+            this.dirPath = dirPath;
+        }
 
         public void LoadTree() {
             byte[] metaBytes = File.ReadAllBytes($"{dirPath}/meta.dat");
-            for (int i = 0; i < metaBytes.Length / 36; i ++)
+            int nodeCount = metaBytes.Length / 36;
+            nodes = new NodeEntry[nodeCount];
+            for (int i = 0; i < nodeCount; i ++)
                 nodes[i] = new NodeEntry(metaBytes, i * 36);
+            fs = File.OpenRead($"{dirPath}/octree.dat");
+
+            // Construct empty tree hierarchy
+            root = nodes[0].ToNode();
+
+            void expandEntries(Node root, ref int idx) {
+                int rootIdx = idx;
+                NodeEntry entry = nodes[rootIdx];
+
+                while (idx != rootIdx + entry.descendentCount)
+                {
+                    
+                }
+                foreach (Node child in node.children)
+                    if (child != null)
+                        traverse(child, cb);
+                cb(node);
+            }
         }
 
         // Get masks separately from points to avoid needless IO
-        public bool[] GetMaskTree(Camera cam) {
+        public bool[] GetTreeMask(Plane[] frustum, Vector3 camPosition, float fov, float screenHeight) {
             bool[] mask = new bool[nodes.Length];
-
+            // Populate bool array with true if node is visible, false otherwise
             int i = 0;
             while (i < nodes.Length) {
-                if (false) { // If bbox outside camera
+                NodeEntry n = nodes[i];
+                double distance = (n.bbox.Center - camPosition).magnitude;
+                double slope = Math.Tan(fov / 2 * Mathf.Deg2Rad);
+                double projectedSize = (screenHeight / 2.0) * (n.bbox.Size.magnitude / 2) / (slope * distance);
+
+                float minNodeSize = 10;
+
+                if (!Utils.TestPlanesAABB(frustum, n.bbox) || projectedSize < minNodeSize) { // If bbox outside camera or too small
                     mask[i] = false;
-                    i += nodes[i].descendentCount;
-                } else if (false) { // If bbox passes test, good distance to render
+                    i += (int)nodes[i].descendentCount;
+                } else {    // Set to render and step into children
                     mask[i] = true;
-                    i += nodes[i].descendentCount;
-                } else {    // Render descendents
-                    mask[i] = false;
                     i++;
                 }
-
             }
-            // Populate bool array with true if node is visible, false otherwise
+
+            return mask;
         }
 
-        public int CountVisiblePoints(bool[] mask) {
-            int sum = 0;
-            for (int i = 0; i < nodes.Length; i++)
-                if (mask[i])
-                    sum += (int)nodes[i].pointCount;
-            return sum;
+        public Point[] ReadNode(int nidx)
+        {
+            NodeEntry n = nodes[nidx];
+            fs.Seek(n.offset, SeekOrigin.Begin);
+            byte[] pBytes = new byte[n.pointCount * 15];
+            fs.Read(pBytes);
+            return Point.ToPoints(pBytes);
         }
 
-        public Point[] ApplyTreeMask(bool[] mask) {
-            FileStream fs = File.OpenRead($"{dirPath}/octree.dat");
-            int visibleCount = CountVisiblePoints(mask);
-            byte[] bytes = new byte[visibleCount * 15];
 
-            int curr = 0;
-            for (int i = 0; i < nodes.Length; i++)
-                if (mask[i]) {
-                    NodeEntry n = nodes[i];
-                    if (fs.Position != n.offset)    // Should sort noderefs by offset to avoid doing this too much
-                        fs.Seek(n.offset, SeekOrigin.Begin);
-                    fs.Read(bytes, curr, n.pointCount * 15);
-                    curr += n.pointCount;
-                }
 
-            return Point.ToPoints(bytes);
-        }
-
-        public async Task BuildTree(PointCloudData data, int treeDepth, string dirPath, Dispatcher dispatcher, Action cb) {
+        public async Task BuildTree(PointCloudData data, int treeDepth, Dispatcher dispatcher, Action cb) {
             Task chunkTask;
 
             try {
@@ -84,7 +101,6 @@ namespace FastPoints {
 
                 Debug.Log($"{name}: Got Bounds");
 
-                this.dirPath = dirPath;
                 this.bbox = new AABB(data.MinPoint, data.MaxPoint);
 
                 chunkTask = Chunker.MakeChunks(data, dirPath, dispatcher);
@@ -186,14 +202,16 @@ namespace FastPoints {
 
                     List<NodeEntry> nodeList = new();
 
-                    uint AddEntry(Node n)
+                    // uint AddEntry(Node n)
+                    void AddEntry(Node n)
                     {
 
                         NodeEntry entry = new NodeEntry
                         {
                             pointCount = n.pointCount,
                             offset = n.offset,
-                            descendentCount = 0,
+                            // descendentCount = 0,
+                            childFlags = n.children.Select(c => c != null).ToArray(),
                             bbox = n.bbox
                         };
 
@@ -201,9 +219,10 @@ namespace FastPoints {
 
                         for (int i = 0; i < 8; i++)
                             if (n.children[i] != null)
-                                entry.descendentCount += AddEntry(n.children[i]);
+                                AddEntry(n.children[i]);
+                                // entry.descendentCount += AddEntry(n.children[i]);
 
-                        return entry.descendentCount;
+                        // return entry.descendentCount;
                     }
 
                     AddEntry(root);
@@ -225,21 +244,6 @@ namespace FastPoints {
             } catch (ThreadAbortException e) {
 
             }
-        }
-    }
-
-    struct BuildTreeParams {
-        public Octree tree;
-        public PointCloudData data;
-        public Dispatcher dispatcher;
-        public string dirPath;
-        public Action cb;
-        public BuildTreeParams(Octree tree, string dirPath, PointCloudData data, Dispatcher dispatcher, Action cb) {
-            this.tree = tree;
-            this.dirPath = dirPath;
-            this.data = data;
-            this.dispatcher = dispatcher;
-            this.cb = cb;
         }
     }
 }
