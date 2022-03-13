@@ -207,7 +207,6 @@ namespace FastPoints {
                         node.pointCount = (uint)acceptedCount;
                     }
                 }
-
             });
         }
 

@@ -85,6 +85,10 @@ namespace FastPoints {
         public static byte[] ToBytes(Point[] src) {
             byte[] bytes = new byte[src.Length*15];
             ToBytes(src, bytes);
+            Point[] debugPoints = Point.ToPoints(bytes);
+            for (int i = 0; i < src.Length; i++)
+                if (!src[i].Equals(debugPoints[i]))
+                    Debug.Log("Big problem!");
             return bytes;
         }
 
@@ -112,6 +116,11 @@ namespace FastPoints {
             Point[] points = new Point[src.Length / 15];
             ToPoints(src, points);
             return points;
+        }
+
+        public override bool Equals(object obj) {
+            Point other = (Point)obj;
+            return pos.Equals(other.pos) && col.Equals(other.col);
         }
 
         

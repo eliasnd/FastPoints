@@ -45,17 +45,18 @@ namespace FastPoints {
     {
         public uint pointCount;
         public uint offset;
-        // public uint descendentCount;
-        public bool[] childFlags;
+        public uint descendentCount;
+        public Point[] points;
+        // public bool[] childFlags;
         public AABB bbox;
 
         public byte[] ToBytes() {
             List<byte> bytes = new();
             bytes.AddRange(BitConverter.GetBytes(pointCount));
             bytes.AddRange(BitConverter.GetBytes(offset));
-            // bytes.AddRange(BitConverter.GetBytes(descendentCount));
-            for (int i = 0; i < 8; i++)
-                bytes.AddRange(BitConverter.GetBytes(childFlags[i]));
+            bytes.AddRange(BitConverter.GetBytes(descendentCount));
+            // for (int i = 0; i < 8; i++)
+            //     bytes.AddRange(BitConverter.GetBytes(childFlags[i]));
             bytes.AddRange(bbox.ToBytes());
 
             return bytes.ToArray();
@@ -66,10 +67,10 @@ namespace FastPoints {
         public NodeEntry(byte[] bytes, int startIdx=0) {
             pointCount = BitConverter.ToUInt32(bytes, startIdx);
             offset = BitConverter.ToUInt32(bytes, startIdx+4);
-            for (int i = 0; i < 8; i++)
-                childFlags[i] = BitConverter.ToBoolean(bytes, startIdx+8+i*4);
-            // descendentCount = BitConverter.ToUInt32(bytes, startIdx+8);
-            bbox = new AABB(bytes, startIdx+40);
+            // for (int i = 0; i < 8; i++)
+            //     childFlags[i] = BitConverter.ToBoolean(bytes, startIdx+8+i*4);
+            descendentCount = BitConverter.ToUInt32(bytes, startIdx+8);
+            bbox = new AABB(bytes, startIdx+12);
         }
 
         public Node ToNode()

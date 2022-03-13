@@ -41,6 +41,8 @@ namespace FastPoints {
         #endregion
 
         bool treeGeneratedOld = false;
+        OctreeReader reader;
+        bool readerRunning = false;
 
         public void Awake() {
             dispatcher = new Dispatcher();
@@ -119,7 +121,8 @@ namespace FastPoints {
                 
             }
 
-            if (!treeWasGenerated && data.TreeGenerated) {
+            if (data.TreeGenerated && !readerRunning) {
+                Debug.Log("init reader");
                 if (!tree.Loaded)
                     tree.LoadTree();
 
@@ -130,9 +133,10 @@ namespace FastPoints {
                 mat.SetBuffer("_PointBuffer", pointBuffer);
                 mat.SetFloat("_PointSize", pointSize);
 
-                Camera cam = Camera.current == null ? Camera.main : Camera.current;
-                readThread = new Thread(new ParameterizedThreadStart(ReadTreeThread));
-                readThread.Start(new ReadTreeParams(tree, cam.projectionMatrix * cam.worldToCameraMatrix, pointBuffer, dispatcher, () => {}));
+                // readThread = new Thread(new ParameterizedThreadStart(ReadTreeThread));
+                // readThread.Start(new ReadTreeParams(tree, cam.projectionMatrix * cam.worldToCameraMatrix, pointBuffer, dispatcher, () => {}));
+                reader = new(tree, this, Camera.current == null ? Camera.main : Camera.current);
+                readerRunning = true;
             }
 
             for (int i = 0; i < actionsPerFrame; i++) {
@@ -167,11 +171,27 @@ namespace FastPoints {
             if (data.TreeGenerated) {
                 Debug.Log("Render");
                 Camera cam = Camera.current == null ? Camera.main : Camera.current;
-                rp.mat = cam.projectionMatrix * cam.worldToCameraMatrix;
+                reader.SetCamera(cam);
+                
+                // Create new point buffer
+                // Point[] loadedPoints = tree.GetLoadedPoints();
+                Point[] loadedPoints = tree.nodes[0].points == null ? new Point[0] : tree.nodes[0].points;
+                
+                if (loadedPoints.Length == 0)
+                    return;
+
+                ComputeBuffer cb = new ComputeBuffer(loadedPoints.Length, Point.size);
+                cb.SetData(loadedPoints);
+
+                mat.hideFlags = HideFlags.DontSave;
+                mat.SetBuffer("_PointBuffer", cb);
+                mat.SetFloat("_PointSize", pointSize);
                 mat.SetMatrix("_Transform", transform.localToWorldMatrix);
                 mat.SetPass(0);
 
-                Graphics.DrawProceduralNow(MeshTopology.Points, (int)Interlocked.Read(ref rp.pointCount), 1);
+                Graphics.DrawProceduralNow(MeshTopology.Points, loadedPoints.Length, 1);
+
+                cb.Dispose();
             } else if (data.DecimatedGenerated) {
                 // Debug.Log($"Point size: {System.Runtime.InteropServices.Marshal.SizeOf<Vector3>()} + {System.Runtime.InteropServices.Marshal.SizeOf<Color>()}");
                 ComputeBuffer cb = new ComputeBuffer(data.decimatedCloud.Length, Point.size);
@@ -215,35 +235,35 @@ namespace FastPoints {
             ComputeBuffer pointBuffer = p.pointBuffer;
 
             // TEST AABB CULLING
-            while (!p.stopSignal) {
-                Debug.Log(mat);
-                AABB bbox = new AABB(new Vector3(0,0,0), new Vector3(5,5,5));
-                Rect screenRect = bbox.ToScreenRect(p.mat);
-                Debug.Log(screenRect.ToString());
-            }
+            // while (!p.stopSignal) {
+            //     Debug.Log(mat);
+            //     AABB bbox = new AABB(new Vector3(0,0,0), new Vector3(5,5,5));
+            //     Rect screenRect = bbox.ToScreenRect(p.mat);
+            //     Debug.Log(screenRect.ToString());
+            // }
             // END TEST
 
-            try {
-                bool[] lastMask = tree.GetTreeMask(mat);
-                while (!p.stopSignal) {
-                    Debug.Log("Checking mask");
-                    Thread.Sleep(30);  // Pick interval for updating mask 
-                    bool[] mask = tree.GetTreeMask(mat);
-                    int pointCount = Mathf.Min(tree.CountVisiblePoints(mask), pointBuffer.count);
-                    if (!lastMask.Equals(mask)) {
-                        Debug.Log("New mask");
-                        if (pointCount > 0) {
-                            Debug.Log("Nonempty mask");
-                            pointBuffer.SetData(tree.ApplyTreeMask(mask), 0, 0, pointCount);
-                        }
-                        Interlocked.Exchange(ref p.pointCount, (long)pointCount);
+            // try {
+            //     bool[] lastMask = tree.GetTreeMask(mat);
+            //     while (!p.stopSignal) {
+            //         Debug.Log("Checking mask");
+            //         Thread.Sleep(30);  // Pick interval for updating mask 
+            //         bool[] mask = tree.GetTreeMask(mat);
+            //         int pointCount = Mathf.Min(tree.CountVisiblePoints(mask), pointBuffer.count);
+            //         if (!lastMask.Equals(mask)) {
+            //             Debug.Log("New mask");
+            //             if (pointCount > 0) {
+            //                 Debug.Log("Nonempty mask");
+            //                 pointBuffer.SetData(tree.ApplyTreeMask(mask), 0, 0, pointCount);
+            //             }
+            //             Interlocked.Exchange(ref p.pointCount, (long)pointCount);
                         
-                        lastMask = mask;
-                    }
-                }
-            } catch (Exception e) {
-                Debug.Log($"ReadThread Exception. Message: {e.Message}, Backtrace: {e.StackTrace}, Inner: {e.InnerException}");
-            }
+            //             lastMask = mask;
+            //         }
+            //     }
+            // } catch (Exception e) {
+            //     Debug.Log($"ReadThread Exception. Message: {e.Message}, Backtrace: {e.StackTrace}, Inner: {e.InnerException}");
+            // }
         }
 
         struct ReadTreeParams {

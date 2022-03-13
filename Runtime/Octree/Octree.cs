@@ -1,4 +1,5 @@
 using UnityEngine;
+using UnityEditor;
 
 using System;
 using System.Diagnostics;
@@ -37,21 +38,23 @@ namespace FastPoints {
             fs = File.OpenRead($"{dirPath}/octree.dat");
 
             // Construct empty tree hierarchy
-            root = nodes[0].ToNode();
+            /* root = nodes[0].ToNode();
 
-            void expandEntries(Node root, ref int idx) {
+            // At end of expandEntry call, idx is on last descendent of root
+            void expandEntry(Node root, ref int idx) {
                 int rootIdx = idx;
                 NodeEntry entry = nodes[rootIdx];
 
-                while (idx != rootIdx + entry.descendentCount)
-                {
-                    
-                }
-                foreach (Node child in node.children)
-                    if (child != null)
-                        traverse(child, cb);
-                cb(node);
+                for (int i = 0; i < 8; i++)
+                    if (entry.childFlags[i]) {
+                        idx++;
+                        Node child = nodes[idx].ToNode();
+                        expandEntry(child, ref idx);
+                    }
             }
+
+            int idx = 0;
+            expandEntry(root, ref idx); */
         }
 
         // Get masks separately from points to avoid needless IO
@@ -88,7 +91,18 @@ namespace FastPoints {
             return Point.ToPoints(pBytes);
         }
 
+        public Point[] GetLoadedPoints() {
+            List<Point> result = new();
 
+            foreach (NodeEntry n in nodes) {
+                lock (n) {
+                    if (n.points != null)
+                        result.AddRange(n.points);
+                }
+            }
+
+            return result.ToArray();
+        }
 
         public async Task BuildTree(PointCloudData data, int treeDepth, Dispatcher dispatcher, Action cb) {
             Task chunkTask;
@@ -103,12 +117,11 @@ namespace FastPoints {
 
                 this.bbox = new AABB(data.MinPoint, data.MaxPoint);
 
-                chunkTask = Chunker.MakeChunks(data, dirPath, dispatcher);
-                await chunkTask;
+                // chunkTask = Chunker.MakeChunks(data, dirPath, dispatcher);
+                // await chunkTask;
 
                 Debug.Log($"{name}: Chunking done");
 
-                Task indexTask;
                 try {
                     QueuedWriter qw = new($"{dirPath}/octree.dat");
                     Indexer idxr = new(qw, dispatcher);
@@ -188,8 +201,14 @@ namespace FastPoints {
                     }
 
                     Sampling.Sample(root, (Node node) => {
+                        if (node == root)
+                            node = root;
                         node.offset = (uint)qw.Enqueue(Point.ToBytes(node.points));
+                        node.points = null;
                     });
+
+                    root.offset = (uint)qw.Enqueue(Point.ToBytes(root.points));
+                    // root.points = null;
 
                     void traverse(Node node, Action<Node> cb) {
                         foreach (Node child in node.children)
@@ -198,31 +217,57 @@ namespace FastPoints {
                         cb(node);
                     }
 
+                    int[] xRangeCounts = new int[24];
+                    foreach (Point pt in root.points)
+                        xRangeCounts[12+Mathf.FloorToInt(pt.pos.x)]++;
+
+                    while (qw.QueueSize > 0)
+                        Thread.Sleep(500);
+
+                    FileStream fs2 = File.Open($"{dirPath}/octree.dat", FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                    fs2.Seek(root.offset, SeekOrigin.Begin);
+                    byte[] pBytes = new byte[root.pointCount * 15];
+                    fs2.Read(pBytes);
+                    Point[] pts = Point.ToPoints(pBytes);
+
+                    foreach (Point pt in pts)
+                        if (!root.points.Contains(pt))
+                            Debug.Log("Bad!");
+
+                    foreach (Point pt in root.points)
+                        if (!pts.Contains(pt))
+                            Debug.Log("Bad!");
+
                     // traverse(root, (Node n) => { n.children = null; });
 
                     List<NodeEntry> nodeList = new();
 
-                    // uint AddEntry(Node n)
-                    void AddEntry(Node n)
+                    xRangeCounts = xRangeCounts;
+
+                    uint AddEntry(Node n)
+                    // void AddEntry(Node n)
                     {
 
                         NodeEntry entry = new NodeEntry
                         {
                             pointCount = n.pointCount,
                             offset = n.offset,
-                            // descendentCount = 0,
-                            childFlags = n.children.Select(c => c != null).ToArray(),
+                            descendentCount = 0,
+                            // childFlags = n.children.Select(c => c != null).ToArray(),
                             bbox = n.bbox
                         };
 
                         nodeList.Add(entry);
 
+                        if (n.IsLeaf)
+                            n = n;
+
                         for (int i = 0; i < 8; i++)
                             if (n.children[i] != null)
-                                AddEntry(n.children[i]);
-                                // entry.descendentCount += AddEntry(n.children[i]);
+                                // AddEntry(n.children[i]);
+                                entry.descendentCount += AddEntry(n.children[i]) + 1;
 
-                        // return entry.descendentCount;
+                        return entry.descendentCount;
                     }
 
                     AddEntry(root);
@@ -236,6 +281,7 @@ namespace FastPoints {
                     Debug.Log($"{name}: Stitching done");
                     cb();
                     Debug.Log($"{name}: All done");
+                    AssetDatabase.ForceReserializeAssets();
                 } catch (Exception e)
                 {
                     Debug.Log($"Exception. Message: {e.Message}, Backtrace: {e.StackTrace}, Inner: {e.InnerException}");

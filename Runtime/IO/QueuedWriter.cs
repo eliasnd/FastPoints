@@ -18,6 +18,7 @@ namespace FastPoints {
 
         object enqueueLock = new object();
         long currOffset;
+        int numEnqueued = 0;
 
         public long QueueSize
         {
@@ -25,13 +26,13 @@ namespace FastPoints {
             {
                 // lock (p.queueSizeLock)
                 // {
-                    return p.queueSize;
+                    return Interlocked.Read(ref p.queueSize);
                 // }
             }
         }
 
         public QueuedWriter(string path) {
-            stream = File.Open(path, FileMode.OpenOrCreate, FileAccess.Write, FileShare.ReadWrite);
+            stream = File.Open(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.ReadWrite);
             Start();
         }
 
@@ -58,14 +59,29 @@ namespace FastPoints {
 
             p.stream.Seek(p.offset, SeekOrigin.Begin);
 
+            int numDequeued = 0;
+
             while (!p.stopSignal || p.queue.Count > 0) {
                 (byte[] b, uint l) tup;
                 while (!p.queue.TryDequeue(out tup)) { }
 
                 Interlocked.Add(ref p.queueSize, -(long)tup.b.Length);
+                numDequeued++;
 
-                if (tup.l == uint.MaxValue)
+                // Debug.Log($"Dequeued {numDequeued}, writing at position {p.stream.Position}");
+
+                if (tup.l == uint.MaxValue) {
+                    uint oldPos = (uint)p.stream.Position;
                     p.stream.Write(tup.b);
+                    p.stream.Seek(oldPos, SeekOrigin.Begin);    // Read back bytes and check
+                    byte[] test = new byte[tup.b.Length];
+                    p.stream.Read(test);
+                    if (test.Length % 15 != 0)
+                        Debug.Log("Wrong length!");
+                    for (int i = 0; i < test.Length; i++)
+                        if (test[i] != tup.b[i])
+                            Debug.Log("Problem!");
+                }
                 else
                 {
                     uint oldPos = (uint)p.stream.Position;
@@ -100,6 +116,8 @@ namespace FastPoints {
                 if (pos == uint.MaxValue) {
                     long ptr =currOffset;
                     currOffset += (long)bytes.Length;
+                    numEnqueued++;
+                    // Debug.Log($"Enqueued {numEnqueued}, got position {ptr}");
                     return ptr;
                 } else
                     return (long)pos;
@@ -107,7 +125,7 @@ namespace FastPoints {
         }
     }
 
-    struct WriterThreadParams
+    class WriterThreadParams
     {
         public ConcurrentQueue<(byte[], uint)> queue;
         public object queueSizeLock;

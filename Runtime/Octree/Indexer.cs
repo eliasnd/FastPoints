@@ -453,6 +453,7 @@ namespace FastPoints {
                 //await SubsampleNode(root, qw, rand);
                 Sampling.Sample(root, (Node node) => {
                     node.offset = (uint)qw.Enqueue(Point.ToBytes(node.points));
+                    node.points = null;
                 });
 
                 if (!root.IsLeaf)

@@ -15,16 +15,36 @@ namespace FastPoints {
 
         PointCloudLoader loader;
 
-        public OctreeReader(Octree tree, PointCloudLoader loader) {
+        public OctreeReader(Octree tree, PointCloudLoader loader, Camera initCam) {
+            Debug.Log("Octree reader constructor");
             this.loader = loader;
 
+            ConcurrentQueue<int> toLoad = new();
+            ConcurrentQueue<int> toUnload = new();
+            object paramsLock = new();
+
             maskerThread = new Thread(new ParameterizedThreadStart(MaskOctree));
-            maskerParams = new OctreeMaskerParams();
-            readerThread.Start(maskerParams);
+            maskerParams = new OctreeMaskerParams {
+                paramsLock = paramsLock,
+                tree = tree,
+                stopSignal = false,
+                toLoad = toLoad,
+                toUnload = toUnload
+            };
+            SetCamera(initCam);
+            maskerThread.Start(maskerParams);
 
             readerThread = new Thread(new ParameterizedThreadStart(ReadOctree));
-            readerParams = new OctreeReaderParams();
+            readerParams = new OctreeReaderParams {
+                paramsLock = paramsLock,
+                tree = tree,
+                stopSignal = false,
+                toLoad = toLoad,
+                toUnload = toUnload
+            };
             readerThread.Start(readerParams);
+
+            Debug.Log("Done octree reader");
         }
 
         // Call from main thread!
@@ -35,6 +55,7 @@ namespace FastPoints {
                 maskerParams.screenHeight = cam.pixelRect.height;
                 maskerParams.fov = cam.fieldOfView;
             }
+            Debug.Log($"Set camera position to {maskerParams.camPosition.ToString()}");
         }
 
         public void StopReader() {
@@ -47,10 +68,10 @@ namespace FastPoints {
         }
 
         static void MaskOctree(object obj) {
+            Debug.Log("Octree mask thread");
             OctreeMaskerParams p = (OctreeMaskerParams)obj;
 
-            while (!p.stopSignal)
-            {
+            while (!p.stopSignal) {
                 bool[] mask;
 
                 lock (p.paramsLock)
@@ -58,29 +79,23 @@ namespace FastPoints {
                     mask = GetTreeMask(p.tree, p.frustum, p.camPosition, p.fov, p.screenHeight);
                 }
 
-                byte[] pBytes = new byte[CountVisiblePoints(p.tree, mask) * 15];
-                int idx = 0;
-
-                FileStream fs = File.OpenRead($"{p.tree.dirPath}/octree.dat");
-
                 for (int i = 0; i < mask.Length; i++)
                 {
-                    if (!mask[i])
-                        continue;
-
-                    NodeEntry n = p.tree.nodes[i];
-
-                    if (fs.Position != n.offset)
-                        fs.Seek(n.offset, SeekOrigin.Begin);
-
-                    fs.Read(pBytes, idx, (int)n.pointCount);
+                    if (!mask[i] && p.tree.nodes[i].points != null) {
+                        p.tree.nodes[i].points = null;
+                        // p.toUnload.Enqueue(i);
+                    } else if (mask[i] && p.tree.nodes[i].points == null)
+                        p.toLoad.Enqueue(i);
                 }
+
+                Thread.Sleep(50);
                     
             }
         }
 
         // Get masks separately from points to avoid needless IO
         public static bool[] GetTreeMask(Octree tree, Plane[] frustum, Vector3 camPosition, float fov, float screenHeight) {
+            Debug.Log($"Get tree mask. camPosition is {camPosition.ToString()}");
             bool[] mask = new bool[tree.nodes.Length];
             // Populate bool array with true if node is visible, false otherwise
             int i = 0;
@@ -94,7 +109,7 @@ namespace FastPoints {
 
                 if (!Utils.TestPlanesAABB(frustum, n.bbox) || projectedSize < minNodeSize) { // If bbox outside camera or too small
                     mask[i] = false;
-                    i += (int)tree.nodes[i].descendentCount;
+                    i += (int)tree.nodes[i].descendentCount + 1;
                 } else {    // Set to render and step into children
                     mask[i] = true;
                     i++;
@@ -116,26 +131,64 @@ namespace FastPoints {
         
 
         static void ReadOctree(object obj) {
+            Debug.Log("Octree read thread");
             OctreeReaderParams p = (OctreeReaderParams)obj;
-            FileStream fs = File.OpenRead(p.tree.dirPath);
+            FileStream fs = File.Open($"{p.tree.dirPath}/octree.dat", FileMode.Open, FileAccess.Read, FileShare.Read);
+
+            int[] unloadCounts = new int[p.tree.nodes.Length];  // Unused
 
             while (!p.stopSignal) {
+                Debug.Log("Read octree loop");
                 // Construct new point array and pass to compute shader
 
-                NodeEntry node;
-                while (!p.nodesToRead.TryDequeue(out node)) {
-                    if (p.stopSignal)
-                        return;
-                    Thread.Sleep(50);
+                if (p.toLoad.Count > 0) {
+                    int n;
+                    while (!p.toLoad.TryDequeue(out n))
+                        Thread.Sleep(50);
+
+                    NodeEntry node = p.tree.nodes[n];
+
+                    if (node.points != null)
+                        continue;
+
+                    lock (node) {
+                        byte[] pBytes = new byte[node.pointCount * 15];
+
+                        if (fs.Position != node.offset)
+                            fs.Seek(node.offset, SeekOrigin.Begin);
+                        fs.Read(pBytes, 0, (int)node.pointCount * 15);
+                        node.points = Point.ToPoints(pBytes);
+                    }
+
+                    if (n == 0) {
+                        int[] xRangeCounts = new int[24];
+                        foreach (Point pt in node.points)
+                            xRangeCounts[12+Mathf.FloorToInt(pt.pos.x)]++;
+                        xRangeCounts = xRangeCounts;
+                    }
                 }
 
-                // At this point, have node
+                // if (p.toUnload.Count > 0) {
+                //     // Probably do some caching here, check number with unloadCounts
+                //     int n;
+                //     while (!p.toUnload.TryDequeue(out n))
+                //         Thread.Sleep(50);
 
+                //     NodeEntry node = p.tree.nodes[n];
+                //     node.points = null;
+                //     Debug.Log($"Unloaded {n}");
+                // }
+                int loadedNodes = 0;
+                for (int i = 0; i < p.tree.nodes.Length; i++)
+                    if (p.tree.nodes[i].points != null)
+                        loadedNodes++;
+                Debug.Log($"Cycle, {loadedNodes} loaded nodes");
+                Thread.Sleep(50);
             }
         }
     }
 
-    public struct OctreeMaskerParams {
+    public class OctreeMaskerParams {
         public object paramsLock;
         public Octree tree;
         public Plane[] frustum;
@@ -144,13 +197,15 @@ namespace FastPoints {
         public float fov;
         public bool[] currMask;
         public bool stopSignal;
+        public ConcurrentQueue<int> toLoad;
+        public ConcurrentQueue<int> toUnload;
     }
 
-    public struct OctreeReaderParams {
+    public class OctreeReaderParams {
         public object paramsLock;
         public Octree tree;
-        public ConcurrentQueue<NodeEntry> toLoad;
-        public ConcurrentQueue<NodeEntry> toUnload;
+        public ConcurrentQueue<int> toLoad;
+        public ConcurrentQueue<int> toUnload;
         public bool stopSignal;
     }
 

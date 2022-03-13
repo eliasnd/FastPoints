@@ -59,7 +59,7 @@ namespace FastPoints {
         }
 
         // Get planes from frustum with GeometryUtil.CalculateFrustumPlanes(Camera cam)
-        public bool Intersects(Plane[] planes) {
+        /* public bool Intersects(Plane[] planes) {
             return Utils.TestPlanesAABB(planes, AsBounds());
         }
 
@@ -70,7 +70,7 @@ namespace FastPoints {
             // Create rect in screen space and return - does not account for camera perspective
             // Rect coordinates are range [0, 1] x [0, 1]
             return new Rect(origin.x, 1 - origin.y, extent.x - origin.x, origin.y - extent.y);
-        }
+        } */
 
         public AABB[] Subdivide(int count) {
             AABB[] result = new AABB[count * count * count];
