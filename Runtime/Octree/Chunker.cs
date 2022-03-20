@@ -168,6 +168,8 @@ namespace FastPoints {
             List<AABB> chunkBBox = new();   // DEBUG
             int[] lut = new int[chunkGridSize * chunkGridSize * chunkGridSize];
 
+            uint total = 0;
+
             void AddToLUT(int level, int x, int y, int z)
             {
                 int idx = Utils.MortonEncode(z, y, x);
@@ -181,6 +183,7 @@ namespace FastPoints {
                     lut[idx] = chunkPaths.Count;
                     chunkPaths.Add($"{targetDir}/chunks/{ToNodeID(level, (int)Mathf.Pow(2, level), (int)x, (int)y, (int)z)}.dat");
                     chunkBBox.Add(bbox);
+                    total += sumPyramid[level][idx];
                 }
                 else if (sumPyramid[level][idx] < maxChunkSize) // Else, add if below max chunk size
                 {
@@ -191,6 +194,7 @@ namespace FastPoints {
                     int childIdx = Utils.MortonEncode(chunkSize*z, chunkSize*y, chunkSize*x);
                     for (int i = 0; i < chunkSize * chunkSize * chunkSize; i++)
                         lut[childIdx+i] = chunkIdx;
+                    total += sumPyramid[level][idx];
                 }
                 else   // Recursively call on children
                 {
@@ -207,6 +211,8 @@ namespace FastPoints {
 
             AddToLUT(0, 0, 0, 0);
 
+            Debug.Log($"Total count is {total}");
+
             // Debug.Log("C6");
 
             Debug.Log("Chunks are:");
@@ -220,10 +226,12 @@ namespace FastPoints {
             ConcurrentQueue<(Point[], uint[])> sortedBatches = new ConcurrentQueue<(Point[], uint[])>();
             int maxSorted = 100;
 
+            if (Directory.Exists(targetDir))
+                Directory.Delete(targetDir, true);
             Directory.CreateDirectory($"{targetDir}");
             Directory.CreateDirectory($"{targetDir}/chunks");
 
-            ThreadedWriter chunkWriter = new ThreadedWriter(12);
+            ThreadedWriter chunkWriter = new ThreadedWriter(1);
 
             Task writeChunksTask = Task.Run(() => {
                 int chunkCount = chunkPaths.Count;
@@ -273,6 +281,9 @@ namespace FastPoints {
 
                     pointsToWrite -= tup.batch.Length;
                 }
+
+                while (chunkWriter.BytesWritten < data.PointCount * 15)
+                    Thread.Sleep(500);
 
                 r245Points.Sort();
                 foreach (Point pt in r245Points)

@@ -224,19 +224,19 @@ namespace FastPoints {
                     while (qw.QueueSize > 0)
                         Thread.Sleep(500);
 
-                    FileStream fs2 = File.Open($"{dirPath}/octree.dat", FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-                    fs2.Seek(root.offset, SeekOrigin.Begin);
-                    byte[] pBytes = new byte[root.pointCount * 15];
-                    fs2.Read(pBytes);
-                    Point[] pts = Point.ToPoints(pBytes);
+                    // FileStream fs2 = File.Open($"{dirPath}/octree.dat", FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                    // fs2.Seek(root.offset, SeekOrigin.Begin);
+                    // byte[] pBytes = new byte[root.pointCount * 15];
+                    // fs2.Read(pBytes);
+                    // Point[] pts = Point.ToPoints(pBytes);
 
-                    foreach (Point pt in pts)
-                        if (!root.points.Contains(pt))
-                            Debug.Log("Bad!");
+                    // foreach (Point pt in pts)
+                    //     if (!root.points.Contains(pt))
+                    //         Debug.Log("Bad!");
 
-                    foreach (Point pt in root.points)
-                        if (!pts.Contains(pt))
-                            Debug.Log("Bad!");
+                    // foreach (Point pt in root.points)
+                    //     if (!pts.Contains(pt))
+                    //         Debug.Log("Bad!");
 
                     // traverse(root, (Node n) => { n.children = null; });
 
@@ -244,10 +244,12 @@ namespace FastPoints {
 
                     xRangeCounts = xRangeCounts;
 
+                    uint memFootprint = 0;
+
                     uint AddEntry(Node n)
                     // void AddEntry(Node n)
                     {
-
+                        Debug.Log("AddEntry");
                         NodeEntry entry = new NodeEntry
                         {
                             pointCount = n.pointCount,
@@ -257,15 +259,26 @@ namespace FastPoints {
                             bbox = n.bbox
                         };
 
+                        memFootprint += 36; // Size of entry in bytes?
+
+                        if (memFootprint > 1024 * 1024 * 1024)  // 1 GB
+                            Debug.Log("Here!");
+
                         nodeList.Add(entry);
 
                         if (n.IsLeaf)
                             n = n;
 
+                        // List<Task> childTasks = new();
+
                         for (int i = 0; i < 8; i++)
                             if (n.children[i] != null)
-                                // AddEntry(n.children[i]);
                                 entry.descendentCount += AddEntry(n.children[i]) + 1;
+                                // childTasks.Add(AddEntry(n.children[i]));
+
+                        // Task.WaitAll(childTasks.ToArray());
+                        // foreach (Task<uint> t in childTasks)
+                        //     entry.descendentCount += t.Result + 1;
 
                         return entry.descendentCount;
                     }
@@ -275,8 +288,10 @@ namespace FastPoints {
                     nodes = nodeList.ToArray();
 
                     FileStream fs = File.Create($"{dirPath}/meta.dat");
-                    for (int n = 0; n < nodes.Length; n++)
+                    for (int n = 0; n < nodes.Length; n++) {
+                        Debug.Log("Write node");
                         fs.Write(nodes[n].ToBytes());
+                    }
 
                     Debug.Log($"{name}: Stitching done");
                     cb();

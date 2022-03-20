@@ -23,6 +23,7 @@ namespace FastPoints {
         public int decimatedCloudSize = 1000000;
         public float pointSize = 1.5f;
         public int treeLevels = 5;
+        public int[] toShow;
         #endregion
 
         int actionsPerFrame = 2;
@@ -140,6 +141,8 @@ namespace FastPoints {
             }
 
             for (int i = 0; i < actionsPerFrame; i++) {
+                if (data.TreeGenerated && readerRunning)
+                    reader.SetNodesToShow(toShow);
                 if (dispatcher.Count > 0) {
                     Action action;
                     dispatcher.TryDequeue(out action);
@@ -174,8 +177,18 @@ namespace FastPoints {
                 reader.SetCamera(cam);
                 
                 // Create new point buffer
-                // Point[] loadedPoints = tree.GetLoadedPoints();
-                Point[] loadedPoints = tree.nodes[0].points == null ? new Point[0] : tree.nodes[0].points;
+                Point[] loadedPoints;
+                if (toShow.Length == 0)
+                    loadedPoints = tree.GetLoadedPoints();
+                else {
+                    List<Point> loadedPointsList = new();
+                    foreach (int i in toShow) {
+                        loadedPointsList.AddRange(tree.nodes[i].points == null ? new Point[0] : tree.nodes[i].points);
+                    }
+                    loadedPoints = loadedPointsList.ToArray();
+                }
+                // Debug.Log($"Picked point {i} with {tree.nodes[i].pointCount} points, points is {tree.nodes[i].points != null}");
+                
                 
                 if (loadedPoints.Length == 0)
                     return;

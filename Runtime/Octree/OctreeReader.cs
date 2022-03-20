@@ -4,10 +4,12 @@ using System;
 using System.Threading;
 using System.Collections.Concurrent;
 using System.IO;
+using System.Linq;
 
 namespace FastPoints {
 
     public class OctreeReader {
+        static int[] nodesToShow = new int[] {7, 8, 9, 10, 11, 12, 13};
         Thread maskerThread;
         OctreeMaskerParams maskerParams;
         Thread readerThread;
@@ -29,7 +31,8 @@ namespace FastPoints {
                 tree = tree,
                 stopSignal = false,
                 toLoad = toLoad,
-                toUnload = toUnload
+                toUnload = toUnload,
+                nodesToShow = new int[0]
             };
             SetCamera(initCam);
             maskerThread.Start(maskerParams);
@@ -67,12 +70,25 @@ namespace FastPoints {
             }
         }
 
+        public void SetNodesToShow(int[] nodesToShow) {
+            lock (maskerParams.nodesToShow) {
+                maskerParams.nodesToShow = nodesToShow;
+                foreach (int i in nodesToShow)
+                    maskerParams.toLoad.Enqueue(i);
+            }
+        }
+
         static void MaskOctree(object obj) {
             Debug.Log("Octree mask thread");
             OctreeMaskerParams p = (OctreeMaskerParams)obj;
+            
 
             while (!p.stopSignal) {
                 bool[] mask;
+
+                if (p.nodesToShow.Length != 0) {
+                    continue;
+                }
 
                 lock (p.paramsLock)
                 {
@@ -199,6 +215,7 @@ namespace FastPoints {
         public bool stopSignal;
         public ConcurrentQueue<int> toLoad;
         public ConcurrentQueue<int> toUnload;
+        public int[] nodesToShow;
     }
 
     public class OctreeReaderParams {

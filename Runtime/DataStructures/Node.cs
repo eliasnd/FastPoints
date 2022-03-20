@@ -45,6 +45,7 @@ namespace FastPoints {
     {
         public uint pointCount;
         public uint offset;
+        // public uint[] childPtrs;
         public uint descendentCount;
         public Point[] points;
         // public bool[] childFlags;
@@ -56,7 +57,7 @@ namespace FastPoints {
             bytes.AddRange(BitConverter.GetBytes(offset));
             bytes.AddRange(BitConverter.GetBytes(descendentCount));
             // for (int i = 0; i < 8; i++)
-            //     bytes.AddRange(BitConverter.GetBytes(childFlags[i]));
+            //     bytes.AddRange(BitConverter.GetBytes(childPtrs[i]));
             bytes.AddRange(bbox.ToBytes());
 
             return bytes.ToArray();
@@ -68,7 +69,7 @@ namespace FastPoints {
             pointCount = BitConverter.ToUInt32(bytes, startIdx);
             offset = BitConverter.ToUInt32(bytes, startIdx+4);
             // for (int i = 0; i < 8; i++)
-            //     childFlags[i] = BitConverter.ToBoolean(bytes, startIdx+8+i*4);
+            //     childPtrs[i] = BitConverter.ToUInt32(bytes, startIdx+8+i*4);
             descendentCount = BitConverter.ToUInt32(bytes, startIdx+8);
             bbox = new AABB(bytes, startIdx+12);
         }

@@ -12,6 +12,23 @@ namespace FastPoints {
         (Thread, ThreadParams)[] threads;
         readonly object writingLock = new object();
         bool stopSignal = false;
+        public long RealBytesWritten { get {
+            long total = 0;
+            foreach (string path in buffers.Keys)
+                total += new FileInfo(path).Length;
+            return total;
+        } }
+
+        public long BytesWritten { get {
+            long total = 0;
+            for (int i = 0; i < threads.Length; i++)
+                total += Interlocked.Read(ref threads[i].Item2.bytesWritten);
+            return total;
+        } }
+
+        public bool VerifyBytesWritten() { 
+            return ((int)(BytesWritten / 1024) + 1) * 1024 == RealBytesWritten;
+        }
 
 
         public ThreadedWriter(int threadCount=1) {
@@ -47,6 +64,8 @@ namespace FastPoints {
         static void WriteThread(object obj) {
             ThreadParams tp = (ThreadParams)obj;
 
+            Dictionary<string, FileStream> streams = new();
+
             while (true) {
                 string path = null;
 
@@ -68,7 +87,10 @@ namespace FastPoints {
                     continue;
                 }
 
-                FileStream fs = File.OpenWrite(path);
+                // FileStream fs = File.OpenWrite(path);
+                if (!streams.ContainsKey(path))
+                    streams.Add(path, File.OpenWrite(path));
+                FileStream fs = streams[path];
                 ConcurrentBag<byte[]> buffer = tp.buffers[path];
 
                 // Flush buffer
@@ -76,16 +98,26 @@ namespace FastPoints {
                     byte[] bytes;
                     while (!buffer.TryTake(out bytes)) {}
                     fs.Write(bytes);
+                    Interlocked.Add(ref tp.bytesWritten, bytes.Length);
                 }
 
                 // Clean up
                 lock (tp.writingLock) {
                     tp.buffers.TryRemove(path, out buffer);
+                    if (buffer.Count != 0)
+                        throw new Exception("Issue!");
                     int i;
                     tp.locks.Remove(path, out i);
                 }
 
-                fs.Close();
+                // Check byteswritten
+                long writtenTotal = 0;
+                foreach (FileStream f in streams.Values)
+                    writtenTotal += f.Position;
+                if (writtenTotal != tp.bytesWritten)
+                    throw new Exception("Mismatch!");
+
+                // fs.Close();
 
                 Thread.Sleep(100);
             }
@@ -98,12 +130,16 @@ namespace FastPoints {
         public ConcurrentDictionary<string, ConcurrentBag<byte[]>> buffers;
         public Dictionary<string, int> locks;
         public bool stopSignal;
+        public object bytesWrittenLock;
+        public long bytesWritten;
 
         public ThreadParams(ConcurrentDictionary<string, ConcurrentBag<byte[]>> buffers, Dictionary<string, int> locks, bool stopSignal, object writingLock) {
             this.buffers = buffers;
             this.locks = locks;
             this.stopSignal = stopSignal;
             this.writingLock = writingLock;
+            this.bytesWrittenLock = new();
+            this.bytesWritten = 0;
         }
     }
 }
