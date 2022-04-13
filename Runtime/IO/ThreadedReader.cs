@@ -32,14 +32,15 @@ namespace FastPoints {
 
             string outputStr = $"Created ThreadedReader with {threadCount} threads\n";
 
-            uint fileLength = (uint)new FileInfo(path).Length;
-            uint threadSize = fileLength / (uint)threadCount;
+            FileInfo fi = new FileInfo(path);
+            long fileLength = fi.Length;
+            long threadSize = fileLength / (long)threadCount;
             if (round != 0)
                 threadSize -= threadSize % (uint)round;
 
             Action closeCallback = () => { int remainingThreads = Interlocked.Add(ref activeThreads, -1); if (remainingThreads == 0) { watch.Stop(); Debug.Log($"Total reading time: {watch.ElapsedMilliseconds}"); } };
-
-            uint currOffset = (uint)offset;
+ 
+            long currOffset = offset;
 
             for (int i = 0; i < threadCount-1; i++) {
                 readThreads[i] = (
@@ -96,6 +97,7 @@ namespace FastPoints {
                 //Debug.Log($"Read batch from {startPos} to {endPos}");
                 
                 queue.Enqueue(bytes);
+                // Debug.Log($"enqueued {tp.batchSize} bytes");
 
                 //Debug.Log("Enqueued bytes");
 
@@ -129,12 +131,12 @@ namespace FastPoints {
 
         public string filePath;
         public ConcurrentQueue<byte[]> readQueue;
-        public uint offset;
-        public uint count;
+        public long offset;
+        public long count;
         public int batchSize;
         public Action closeCallback;
 
-        public ReadThreadParams(string filePath, uint offset, uint count, int batchSize, ConcurrentQueue<byte[]> readQueue, Action closeCallback) {
+        public ReadThreadParams(string filePath, long offset, long count, int batchSize, ConcurrentQueue<byte[]> readQueue, Action closeCallback) {
             this.filePath = filePath;
             this.offset = offset;
             this.count = count;

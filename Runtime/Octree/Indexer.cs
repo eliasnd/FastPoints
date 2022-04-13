@@ -3,6 +3,7 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Collections.Concurrent;
+using System.Buffers;
 using System.Threading.Tasks;
 using System.Diagnostics;
 using System.Collections.Generic;
@@ -13,7 +14,7 @@ using Debug = UnityEngine.Debug;
 
 namespace FastPoints {
     public class Indexer {
-        bool debug = false;
+        bool debug = true;
 
         static int treeDepth = 3;
         static int maxNodeSize = 100000;
@@ -23,6 +24,8 @@ namespace FastPoints {
 
         QueuedWriter qw;
         Dispatcher dispatcher;
+        ArrayPool<Point> pointPool;
+        ArrayPool<int> intPool;
 
         uint footprint;
         object footprintLock = new object();
@@ -45,6 +48,8 @@ namespace FastPoints {
             this.qw = qw;
             this.dispatcher = dispatcher;
             this.rand = new Random();
+            this.pointPool = ArrayPool<Point>.Shared;
+            this.intPool = ArrayPool<int>.Shared;
         }
 
         public async Task IndexChunk(PointCloudData data, Node root, string chunkPath) { 
@@ -72,22 +77,25 @@ namespace FastPoints {
                 Debug.Log($"Starting chunk {Path.GetFileNameWithoutExtension(chunkPath)} with bbox {curr.ToString()}, {chunkFootprint/30} points, footprint now {FootprintMB}");
             }
 
-            Point[] points = Point.ToPoints(File.ReadAllBytes(chunkPath));
+            int pointCount = (int)new FileInfo(chunkPath).Length / 15;
+            Point[] points = pointPool.Rent(pointCount);    // RENT_0
+            Point.ToPoints(File.ReadAllBytes(chunkPath), points);
 
-            if (Path.GetFileNameWithoutExtension(chunkPath) == "r245") {
-                List<Point> ptList = new(points);
-                ptList.Sort();
-                foreach (Point pt in ptList)
-                    Debug.Log($"Read r245: {pt.ToString()}");
+            // if (Path.GetFileNameWithoutExtension(chunkPath) == "r245") {
+            //     List<Point> ptList = new(points);
+            //     ptList.Sort();
+            //     foreach (Point pt in ptList)
+            //         Debug.Log($"Read r245: {pt.ToString()}");
 
-            }
+            // }
 
             // root.bbox = new AABB(new Vector3(curr.Min.x-1E-5f, curr.Min.y-1E-5f, curr.Min.z-1E-5f), new Vector3(curr.Max.x+1E-5f, curr.Max.y+1E-5f, curr.Max.z+1E-5f));
             root.bbox = curr;
             root.name = "n";
             // Debug.Log(chunkPath + ", " + root.bbox.ToString());
 
-            foreach (Point pt in points) {
+            for (int i = 0; i < pointCount; i++) {
+                Point pt = points[i];
                 if (!root.bbox.InAABB(pt.pos))
                     Debug.LogError($"Chunk at {chunkPath} has point {pt.ToString()} outside bbox!");
             }
@@ -95,9 +103,10 @@ namespace FastPoints {
             Stopwatch watch = new();
             watch.Start();
 
-            await IndexPoints(root, points);
+            await IndexPoints(root, points, pointCount); 
 
             watch.Stop();
+            pointPool.Return(points);   // RETURN_0
 
             lock (footprintLock)
             {
@@ -110,14 +119,14 @@ namespace FastPoints {
             // Debug.Log("Exit");
         }
 
-        public async Task IndexPoints(Node root, Point[] points) {
+        public async Task IndexPoints(Node root, Point[] points, int pointCount) {
             if (debug)
                 Debug.Log("I1");
-            try {
-                CheckBBox(points, root.bbox);
-            } catch (Exception e) {
-                Debug.LogError($"Currently at root name {root.name}, error {e.Message}");
-            }
+            // try {
+            //     CheckBBox(points, root.bbox);
+            // } catch (Exception e) {
+            //     Debug.LogError($"Currently at root name {root.name}, error {e.Message}");
+            // }
 
             Stopwatch watch = new Stopwatch();
             TimeSpan currTime = new();
@@ -152,9 +161,9 @@ namespace FastPoints {
 
 
                 // Action outputs
-                uint[] nodeCounts = new uint[gridTotal];
-                uint[] nodeStarts = new uint[gridTotal];
-                Point[] sortedPoints = new Point[points.Length];
+                int[] nodeCounts = intPool.Rent(gridTotal); // RENT_1
+                int[] nodeStarts = intPool.Rent(gridTotal); // RENT_2
+                // Point[] sortedPoints = new Point[points.Length];
 
                 long i3 = watch.ElapsedMilliseconds - currTime.Milliseconds;
                 currTime = watch.Elapsed;
@@ -169,12 +178,27 @@ namespace FastPoints {
                     return mortonIndices[x * gridSize * gridSize + y * gridSize + z];
                 }
 
-                List<Point>[] sortedNodesCPU = new List<Point>[gridTotal];
-                for (int i = 0; i < gridTotal; i++)
-                    sortedNodesCPU[i] = new();
+                int[] pointNodes = intPool.Rent(pointCount);    // RENT_3
+                for (int i = 0; i < pointCount; i++) {
+                    pointNodes[i] = GetChunk(points[i]);
+                    nodeCounts[pointNodes[i]]++;
+                }
 
-                foreach (Point pt in points)
-                    sortedNodesCPU[GetChunk(pt)].Add(pt);
+                nodeStarts[0] = 0;
+                for (int i = 1; i < gridTotal; i++)
+                    nodeStarts[i] = nodeStarts[i-1] + nodeCounts[i-1];
+
+                int[] nodeOffsets = intPool.Rent(gridTotal);    // RENT_4
+                for (int i = 0; i < gridTotal; i++)
+                    nodeOffsets[i] = 0;
+
+                Point[] sortedPoints = pointPool.Rent(pointCount);  // RENT_5
+                for (int i = 0; i < pointCount; i++) {
+                    int node = pointNodes[i];
+                    int idx = nodeStarts[node] + nodeOffsets[node];
+                    sortedPoints[idx] = points[i];
+                    nodeOffsets[node]++;
+                }
 
                 if (debug)
                     Debug.Log("I2");
@@ -182,21 +206,16 @@ namespace FastPoints {
                 long i4 = watch.ElapsedMilliseconds - currTime.Milliseconds;
                 currTime = watch.Elapsed;
 
-                // DEBUG_CODE
-
-                for (int i = 0; i < gridTotal; i++)
-                    nodeCounts[i] = (uint)sortedNodesCPU[i].Count;
-
                 // MAKE SUM PYRAMID
 
-                uint[][] sumPyramid = new uint[treeDepth][];
+                int[][] sumPyramid = new int[treeDepth][];
                 sumPyramid[treeDepth-1] = nodeCounts;
 
                 for (int level = treeDepth-2; level >= 0; level--) {
                     int levelDim = (int)Mathf.Pow(2, level);
-                    uint[] currLevel = new uint[levelDim * levelDim * levelDim];
+                    int[] currLevel = new int[levelDim * levelDim * levelDim];
 
-                    uint[] lastLevel = sumPyramid[level+1];
+                    int[] lastLevel = sumPyramid[level+1];
 
                     for (int x = 0; x < levelDim; x++)
                         for (int y = 0; y < levelDim; y++)
@@ -213,11 +232,11 @@ namespace FastPoints {
                     sumPyramid[level] = currLevel;
                 }
 
-                uint[][] offsetPyramid = new uint[treeDepth][];
+                int[][] offsetPyramid = new int[treeDepth][];
                 for (int l = 0; l < treeDepth; l++)
                 {
-                    uint currOffset = 0;
-                    offsetPyramid[l] = new uint[sumPyramid[l].Length];
+                    int currOffset = 0;
+                    offsetPyramid[l] = new int[sumPyramid[l].Length];
                     for (int i = 0; i < offsetPyramid[l].Length; i++)
                     {
                         offsetPyramid[l][i] = currOffset;
@@ -251,7 +270,7 @@ namespace FastPoints {
 
                 uint offset = 0;
                 for (int i = 0; i < gridTotal; i++) {
-                    uint size = sumPyramid[treeDepth-1][i];
+                    int size = sumPyramid[treeDepth-1][i];
                     for (int j = 0; j < size; j++) {
                         // if (Vector3.Max(sortedPoints[offset].pos, leafBB[i].Max) != leafBB[i].Max || Vector3.Min(sortedPoints[offset].pos, leafBB[i].Min) != leafBB[i].Min)
                         //     Debug.LogError("Found point outside");
@@ -263,23 +282,23 @@ namespace FastPoints {
                 for (int l = 0; l < treeDepth; l++)
                     bboxPyramid[l] = root.bbox.Subdivide((int)Mathf.Pow(2,l));
 
-                List<Point>[][] cpuSortedPyramid = new List<Point>[treeDepth][];
-                cpuSortedPyramid[treeDepth-1] = sortedNodesCPU;
-                for (int l = treeDepth-2; l >= 0; l--) {
-                    cpuSortedPyramid[l] = new List<Point>[(int)Mathf.Pow(8, l)];
-                    for (int n = 0; n < cpuSortedPyramid[l].Length; n++) {
-                        cpuSortedPyramid[l][n] = new();
-                        for (int child = 0; child < 8; child++)
-                            cpuSortedPyramid[l][n].AddRange(cpuSortedPyramid[l+1][n*8+child]);
-                    }
-                }
+                // List<Point>[][] cpuSortedPyramid = new List<Point>[treeDepth][];
+                // cpuSortedPyramid[treeDepth-1] = sortedNodesCPU;
+                // for (int l = treeDepth-2; l >= 0; l--) {
+                //     cpuSortedPyramid[l] = new List<Point>[(int)Mathf.Pow(8, l)];
+                //     for (int n = 0; n < cpuSortedPyramid[l].Length; n++) {
+                //         cpuSortedPyramid[l][n] = new();
+                //         for (int child = 0; child < 8; child++)
+                //             cpuSortedPyramid[l][n].AddRange(cpuSortedPyramid[l+1][n*8+child]);
+                //     }
+                // }
 
                 if (debug)
                     Debug.Log("I3");
 
-                for (int l = 0; l < treeDepth; l++)
-                    for (int n = 0; n < cpuSortedPyramid[l].Length; n++)
-                        CheckBBox(cpuSortedPyramid[l][n].ToArray(), bboxPyramid[l][n]);
+                // for (int l = 0; l < treeDepth; l++)
+                //     for (int n = 0; n < cpuSortedPyramid[l].Length; n++)
+                //         CheckBBox(cpuSortedPyramid[l][n].ToArray(), bboxPyramid[l][n]);
 
                 // AABB[][] bboxPyramidAlt = new AABB[treeDepth][];
                 // bboxPyramidAlt[0] = new AABB[] { root.bbox };
@@ -301,7 +320,7 @@ namespace FastPoints {
                 rootRef.x = 0;
                 rootRef.y = 0;
                 rootRef.z = 0;
-                rootRef.pointCount = sumPyramid[0][0];
+                rootRef.pointCount = (uint)sumPyramid[0][0];
 
                 Stack<NodeReference> stack = new();
                 stack.Push(rootRef);
@@ -311,20 +330,20 @@ namespace FastPoints {
                     c++;
                     NodeReference nr = stack.Pop();
                     int nodeIdx = Utils.MortonEncode(nr.z, nr.y, nr.x);
-                    uint numPoints = sumPyramid[nr.level][nodeIdx];
+                    uint numPoints = (uint)sumPyramid[nr.level][nodeIdx];
                     if (nr.level == treeDepth-1) {
                         if (numPoints > 0)
                             nodeRefs.Add(nr);
                     } else if (numPoints > maxNodeSize) {
                         int childIdx = Utils.MortonEncode(2*nr.z, 2*nr.y, 2*nr.x);
                         for (int i = 0; i < 8; i++) {
-                            uint count = sumPyramid[nr.level+1][childIdx+i];
+                            uint count = (uint)sumPyramid[nr.level+1][childIdx+i];
 
                             if (count > 0) {
                                 NodeReference child = new();
                                 child.level = nr.level+1;
                                 child.name = nr.name + i;
-                                child.offset = offsetPyramid[nr.level + 1][childIdx+i];
+                                child.offset = (uint)offsetPyramid[nr.level + 1][childIdx+i];
                                 // Debug.Log($"Made node {child.name} with level {child.level}, idx {childIdx+i}");
                                 child.pointCount = count;
                                 // child.bbox = bboxPyramid[nr.level + 1][childIdx+i];
@@ -333,7 +352,7 @@ namespace FastPoints {
                                 child.y = 2 * nr.y + ((i & 0b010) >> 1);
                                 child.z = 2 * nr.z + ((i & 0b001) >> 0);
 
-                                if (Utils.MortonEncode(child. z, child.y, child.x) != childIdx+i)
+                                if (Utils.MortonEncode(child.z, child.y, child.x) != childIdx+i)
                                     Debug.LogError($"Mismatch: computed {Utils.MortonEncode(child.z, child.y, child.x)}, should be {childIdx+i}");
 
                                 stack.Push(child);
@@ -390,7 +409,7 @@ namespace FastPoints {
                 {
                     Node node = ExpandReference(nr);
                     node.pointCount = nr.pointCount;
-                    node.points = new Point[node.pointCount];
+                    // node.points = new Point[node.pointCount];
 
                     // node.bbox = nr.bbox;
 
@@ -402,11 +421,17 @@ namespace FastPoints {
                     if (nr.name == null)
                         Debug.Log("Here");
 
-                    node.points = cpuSortedPyramid[nr.level][Utils.MortonEncode(nr.z, nr.y, nr.x)].ToArray();
+                    // node.points = cpuSortedPyramid[nr.level][Utils.MortonEncode(nr.z, nr.y, nr.x)].ToArray();
+                    if (node.name == "n310")
+                        Debug.Log("n310");
+                    node.points = pointPool.Rent((int)node.pointCount); // RENT_6
+                    int nodeOffset = offsetPyramid[nr.level][Utils.MortonEncode(nr.z, nr.y, nr.x)];
+                    for (int i = 0; i < node.pointCount; i++)
+                        node.points[i] = sortedPoints[nodeOffset+i];
                     // Debug.Log($"Got points for {node.name} from idx {Utils.MortonEncode(nr.z, nr.y, nr.x)}");
 
-                    if (node.points.Length != node.pointCount)
-                        Debug.LogError("Biiig!");
+                    // if (node.points.Length != node.pointCount)
+                    //     Debug.LogError("Biiig!");
                     
                     // foreach (Point pt in node.points)
                     //     if (!cpuSortedPyramid[l][idx].Contains(pt))
@@ -425,13 +450,16 @@ namespace FastPoints {
                     }
 
                     if (node.pointCount > maxNodeSize)
-                        recursiveCalls.Add(IndexPoints(node, node.points));
+                        recursiveCalls.Add(IndexPoints(node, node.points, (int)node.pointCount));
                 }
 
                 Task.WaitAll(recursiveCalls.ToArray());
 
                 long i7 = watch.ElapsedMilliseconds - currTime.Milliseconds;
                 currTime = watch.Elapsed;
+
+                if (debug)
+                    Debug.Log("I7");
 
                 // POPULATE INNER NODES
 
@@ -452,7 +480,9 @@ namespace FastPoints {
 
                 //await SubsampleNode(root, qw, rand);
                 Sampling.Sample(root, (Node node) => {
-                    node.offset = (uint)qw.Enqueue(Point.ToBytes(node.points));
+                    Debug.Log("In callback");
+                    node.offset = (uint)qw.Enqueue(Point.ToBytes(node.points, 0, (int)node.pointCount));
+                    pointPool.Return(node.points);  // RETURN_6
                     node.points = null;
                 });
 
@@ -467,6 +497,15 @@ namespace FastPoints {
 
                 if (debug)
                     Debug.Log($"I8");
+
+                intPool.Return(nodeCounts); // RETURN_1
+                intPool.Return(nodeStarts); // RETURN_2
+                intPool.Return(pointNodes); // RETURN_3
+                intPool.Return(nodeOffsets);    // RETURN_4
+                pointPool.Return(sortedPoints); // RETURN_5
+
+                if (debug)
+                    Debug.Log($"I9");
             });
         }
 
@@ -533,7 +572,7 @@ namespace FastPoints {
                     if (node.children[i] != null)
                     {
                         Node child = node.children[i];
-                        child.offset = (uint)qw.Enqueue(Point.ToBytes(child.points));
+                        child.offset = (uint)qw.Enqueue(Point.ToBytes(child.points, 0, (int)child.pointCount));
                         child.points = null;
                     }
             });
@@ -549,7 +588,7 @@ namespace FastPoints {
                     if (node.children[i] != null)
                         childTasks.Add(WriteNode(node.children[i], qw));
 
-                node.offset = (uint)qw.Enqueue(Point.ToBytes(node.points));
+                node.offset = (uint)qw.Enqueue(Point.ToBytes(node.points, 0, (int)node.pointCount));
                 node.points = null;
 
                 Task.WaitAll(childTasks.ToArray());

@@ -71,16 +71,16 @@ namespace FastPoints {
                 // Debug.Log($"Dequeued {numDequeued}, writing at position {p.stream.Position}");
 
                 if (tup.l == uint.MaxValue) {
-                    uint oldPos = (uint)p.stream.Position;
+                    // uint oldPos = (uint)p.stream.Position;
                     p.stream.Write(tup.b);
-                    p.stream.Seek(oldPos, SeekOrigin.Begin);    // Read back bytes and check
-                    byte[] test = new byte[tup.b.Length];
-                    p.stream.Read(test);
-                    if (test.Length % 15 != 0)
-                        Debug.Log("Wrong length!");
-                    for (int i = 0; i < test.Length; i++)
-                        if (test[i] != tup.b[i])
-                            Debug.Log("Problem!");
+                    // p.stream.Seek(oldPos, SeekOrigin.Begin);    // Read back bytes and check
+                    // byte[] test = new byte[tup.b.Length];
+                    // p.stream.Read(test);
+                    // if (test.Length % 15 != 0)
+                    //     Debug.Log("Wrong length!");
+                    // for (int i = 0; i < test.Length; i++)
+                    //     if (test[i] != tup.b[i])
+                    //         Debug.Log("Problem!");
                 }
                 else
                 {

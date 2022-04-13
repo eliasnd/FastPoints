@@ -119,6 +119,7 @@ namespace FastPoints {
                     j += i;
 
                     pointsScanned += batch.Length;
+                    // Debug.Log($"Total scannued {pointsScanned}");
                 }
 
                 Debug.Log($"Preliminarily populated bounds {minPoint.ToString()}, {maxPoint.ToString()}");
@@ -126,7 +127,7 @@ namespace FastPoints {
 
             boundsPopulated = true;
 
-            AssetDatabase.ForceReserializeAssets();
+            Debug.Log($"Bounds populated now {boundsPopulated}");
         }
     }
 }

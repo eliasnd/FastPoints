@@ -538,17 +538,24 @@ namespace FastPoints {
                 tr.Start();
 
                 int totalEnqueued = 0;
+                try {
 
-                while (totalEnqueued < count) {
-                    byte[] bytes;
-                    while (!bQueue.TryDequeue(out bytes))
-                        Thread.Sleep(5);
+                    while (totalEnqueued < count) {
+                        byte[] bytes;
+                        while (!bQueue.TryDequeue(out bytes))
+                            Thread.Sleep(5);
 
-                    if (queue.Count >= maxQueued) {}
+                        if (queue.Count >= maxQueued) {}
 
-                    Point[] batch = ReadPointsBLE(bytes);
-                    queue.Enqueue(batch);
-                    totalEnqueued += bytes.Length / pointSize;
+                        Point[] batch = ReadPointsBLE(bytes);
+                        queue.Enqueue(batch);
+                        totalEnqueued += bytes.Length / pointSize;
+
+                        // Debug.Log($"Total enqueued {totalEnqueued}");
+                    }
+                    // Debug.Log($"Out of loop. All {totalEnqueued}/{count} read to queue");
+                } catch (Exception e) {
+                    Debug.Log($"Exception. Message: {e.Message}, Backtrace: {e.StackTrace}, Inner: {e.InnerException}");
                 }
             });  
         }

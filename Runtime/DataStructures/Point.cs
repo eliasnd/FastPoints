@@ -85,10 +85,21 @@ namespace FastPoints {
         public static byte[] ToBytes(Point[] src) {
             byte[] bytes = new byte[src.Length*15];
             ToBytes(src, bytes);
-            Point[] debugPoints = Point.ToPoints(bytes);
-            for (int i = 0; i < src.Length; i++)
-                if (!src[i].Equals(debugPoints[i]))
-                    Debug.Log("Big problem!");
+            // Point[] debugPoints = Point.ToPoints(bytes);
+            // for (int i = 0; i < src.Length; i++)
+            //     if (!src[i].Equals(debugPoints[i]))
+            //         Debug.Log("Big problem!");
+            return bytes;
+        }
+
+        public static byte[] ToBytes(Point[] src, int offset=0, int count=0) {
+            byte[] bytes = new byte[src.Length*15];
+            ToBytes(src, bytes);
+            // Point[] debugPoints = Point.ToPoints(bytes);
+            count = count == 0 ? src.Length : count;
+            // for (int i = 0; i < count; i++)
+                // if (!src[i].Equals(debugPoints[i]))
+                //     Debug.Log("Big problem!");
             return bytes;
         }
 

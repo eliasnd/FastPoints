@@ -3,6 +3,7 @@ using UnityEngine;
 using System;
 using System.Linq;
 using System.Collections.Generic;
+using System.Buffers;
 
 using Random = System.Random;
 
@@ -64,10 +65,15 @@ namespace FastPoints {
                 foreach (Node child in node.children)
                     if (child != null && !child.subsampled)
                         traverse(child, cb);
+                Debug.Log("Subsampling done");
                 cb(node);
             }
 
             traverse(node, (Node node) => {
+                try {
+                if (node.name == "n310")
+                    Debug.Log("n310");
+                    
                 node.subsampled = true;
 
                 uint pointCount = node.pointCount;
@@ -100,6 +106,9 @@ namespace FastPoints {
 
                     int idx = x * gridSize * gridSize + y * gridSize + z;
 
+                    if (idx > gridSize * gridSize * gridSize)
+                        Debug.LogError("Big.");
+
                     return ( idx, distance );
                 }
 
@@ -111,7 +120,8 @@ namespace FastPoints {
                     Random rnd = new Random();
                     indices = indices.OrderBy(i => rnd.Next()).ToArray();
 
-                    Point[] pointBuffer = new Point[node.pointCount];
+                    // Point[] pointBuffer = new Point[node.pointCount];
+                    Point[] pointBuffer = ArrayPool<Point>.Shared.Rent((int)node.pointCount);
                     for (int i = 0; i < node.pointCount; i++)
                         try { 
                             pointBuffer[i] = node.points[indices[i]];
@@ -138,7 +148,7 @@ namespace FastPoints {
                             continue;
                         }
 
-                        CheckBBox(child.points, node.bbox);
+                        // CheckBBox(child.points, node.bbox);
 
                         bool[] acceptedFlags = new bool[(int)child.pointCount];
                         int rejectedCount = 0;
@@ -162,7 +172,7 @@ namespace FastPoints {
 
                                 acceptedFlags[i] = isAccepted;
                             } catch (Exception e) {
-                                Debug.Log(e.StackTrace);
+                                Debug.Log($"Exception. Message: {e.Message}, Backtrace: {e.StackTrace}, Inner: {e.InnerException}");
                                 // int tmp = 0;
                             }
                         }
@@ -171,7 +181,8 @@ namespace FastPoints {
                         rejectedCounts.Add(rejectedCount);
                     }
 
-                    List<Point> accepted = new(acceptedCount);
+                    Point[] accepted = ArrayPool<Point>.Shared.Rent(acceptedCount);
+                    int acceptedIdx = 0;
                     for (int c = 0; c < 8; c++)
                     {
                         Node child = node.children[c];
@@ -181,31 +192,41 @@ namespace FastPoints {
 
                         int rejectedCount = rejectedCounts[c];
                         bool[] acceptedFlags = acceptedChildFlags[c];
-
-                        List<Point> rejected = new(rejectedCount);
+                        
+                        Point[] rejected = ArrayPool<Point>.Shared.Rent(rejectedCount);
+                        int rejectedIdx = 0;
 
                         for (int i = 0; i < child.pointCount; i++)
                         {
                             bool isAccepted = acceptedFlags[i];
-                            if (acceptedFlags[i])
-                                accepted.Add(child.points[i]);
-                            else
-                                rejected.Add(child.points[i]);
+                            if (acceptedFlags[i]) {
+                                accepted[acceptedIdx] = child.points[i];
+                                acceptedIdx++;
+                            }
+                            else {
+                                rejected[rejectedIdx] = child.points[i];
+                                rejectedIdx++;
+                            }
                         }
+
+                        ArrayPool<Point>.Shared.Return(child.points);
 
                         if (rejectedCount == 0)
                             node.children[c] = null;
                         else
                         {
-                            child.points = rejected.ToArray();
+                            child.points = rejected;
                             child.pointCount = (uint)rejectedCount;
 
                             cb(child);
                         }
 
-                        node.points = accepted.ToArray();
+                        node.points = accepted;
                         node.pointCount = (uint)acceptedCount;
                     }
+                }
+                } catch (Exception e) {
+                    Debug.Log($"Exception. Message: {e.Message}, Backtrace: {e.StackTrace}, Inner: {e.InnerException}");
                 }
             });
         }

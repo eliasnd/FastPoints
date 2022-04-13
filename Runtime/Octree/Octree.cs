@@ -109,7 +109,7 @@ namespace FastPoints {
 
             try {
                 string name = dirPath.Split(Path.DirectorySeparatorChar)[dirPath.Split(Path.DirectorySeparatorChar).Length-1];
-
+                Debug.Log($"{name}: Building Tree");
                 if (!data.BoundsPopulated) 
                     await data.PopulateBounds();
 
@@ -117,8 +117,8 @@ namespace FastPoints {
 
                 this.bbox = new AABB(data.MinPoint, data.MaxPoint);
 
-                // chunkTask = Chunker.MakeChunks(data, dirPath, dispatcher);
-                // await chunkTask;
+                chunkTask = Chunker.MakeChunks(data, dirPath, dispatcher);
+                await chunkTask;
 
                 Debug.Log($"{name}: Chunking done");
 
@@ -145,8 +145,9 @@ namespace FastPoints {
                         while (idxr.FootprintMB > 1024)
                             Thread.Sleep(50);
 
-                        // await idxr.IndexChunk(data, chunkRoots[i], chunkPaths[i]);
-                        indexTasks.Add(idxr.IndexChunk(data, chunkRoots[i], chunkPaths[i]));
+                        await idxr.IndexChunk(data, chunkRoots[i], chunkPaths[i]);
+                        // indexTasks.Add(idxr.IndexChunk(data, chunkRoots[i], chunkPaths[i]));
+                        Debug.Log($"Landmark chunk {i}/{chunkPaths.Length}");
                         // Debug.Log($"{i} chunks added");
                     }
 

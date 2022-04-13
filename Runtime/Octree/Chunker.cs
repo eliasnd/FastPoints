@@ -47,23 +47,23 @@ namespace FastPoints {
 
             // int maxMorton = mortonIndices.Max();
 
-            await dispatcher.EnqueueAsync(() => {
-                computeShader = (ComputeShader)Resources.Load("CountAndSort");
+            // await dispatcher.EnqueueAsync(() => {
+            //     computeShader = (ComputeShader)Resources.Load("CountAndSort");
 
-                chunkGridBuffer = new ComputeBuffer(chunkGridSize * chunkGridSize * chunkGridSize, sizeof(uint));
+            //     chunkGridBuffer = new ComputeBuffer(chunkGridSize * chunkGridSize * chunkGridSize, sizeof(uint));
 
-                computeShader.SetFloats("_MinPoint", minPoint);
-                computeShader.SetFloats("_MaxPoint", maxPoint);
+            //     computeShader.SetFloats("_MinPoint", minPoint);
+            //     computeShader.SetFloats("_MaxPoint", maxPoint);
 
-                ComputeBuffer mortonBuffer = new ComputeBuffer(chunkGridSize * chunkGridSize * chunkGridSize, sizeof(int));
-                mortonBuffer.SetData(mortonIndices);
-                computeShader.SetBuffer(computeShader.FindKernel("CountPoints"), "_MortonIndices", mortonBuffer);
-                computeShader.SetBuffer(computeShader.FindKernel("SortPoints"), "_MortonIndices", mortonBuffer);
+            //     ComputeBuffer mortonBuffer = new ComputeBuffer(chunkGridSize * chunkGridSize * chunkGridSize, sizeof(int));
+            //     mortonBuffer.SetData(mortonIndices);
+            //     computeShader.SetBuffer(computeShader.FindKernel("CountPoints"), "_MortonIndices", mortonBuffer);
+            //     computeShader.SetBuffer(computeShader.FindKernel("SortPoints"), "_MortonIndices", mortonBuffer);
 
-                computeShader.SetInt("_NodeCount", chunkGridSize);
-                computeShader.SetBuffer(computeShader.FindKernel("CountPoints"), "_Counts", chunkGridBuffer);
-                computeShader.SetInt("_ThreadBudget", threadBudget);
-            });
+            //     computeShader.SetInt("_NodeCount", chunkGridSize);
+            //     computeShader.SetBuffer(computeShader.FindKernel("CountPoints"), "_Counts", chunkGridBuffer);
+            //     computeShader.SetInt("_ThreadBudget", threadBudget);
+            // });
 
             // Debug.Log("C3");
 
@@ -85,26 +85,50 @@ namespace FastPoints {
 
             uint pointsToCount = (uint)data.PointCount;
 
-            for (int i = 0; i < threadCount; i++) {
-                countThreads[i] = new Thread(new ParameterizedThreadStart(CountThread));
-                threadParams[i] = new CountThreadParams(readQueue, new AABB(data.MinPoint, data.MaxPoint), mortonIndices, counterLock, testCounts, (uint batchSize) => {
-                    pointsToCount -= batchSize;
-                    Debug.Log($"Points counted: {data.PointCount - pointsToCount}");
-                }, 3);
-                countThreads[i].Start(threadParams[i]);
+            // for (int i = 0; i < threadCount; i++) {
+            //     countThreads[i] = new Thread(new ParameterizedThreadStart(CountThread));
+            //     threadParams[i] = new CountThreadParams(readQueue, new AABB(data.MinPoint, data.MaxPoint), mortonIndices, counterLock, testCounts, (uint batchSize) => {
+            //         pointsToCount -= batchSize;
+            //         Debug.Log($"Points counted: {data.PointCount - pointsToCount}");
+            //     }, 3);
+            //     countThreads[i].Start(threadParams[i]);
+            // }
+
+            // while (pointsToCount > 0)
+            //     Thread.Sleep(300);
+
+            int GetChunk(Point p) {
+                Vector3 size = data.MaxPoint - data.MinPoint;
+
+                float x_norm = (p.pos.x - data.MinPoint.x) / size.x;
+                float y_norm = (p.pos.y - data.MinPoint.y) / size.y;
+                float z_norm = (p.pos.z - data.MinPoint.z) / size.z;
+
+                int x = (int)Mathf.Min(x_norm * chunkGridSize, chunkGridSize-1);
+                int y = (int)Mathf.Min(y_norm * chunkGridSize, chunkGridSize-1);
+                int z = (int)Mathf.Min(z_norm * chunkGridSize, chunkGridSize-1);
+
+                return mortonIndices[x * chunkGridSize * chunkGridSize + y * chunkGridSize + z];
             }
 
-            while (pointsToCount > 0)
-                Thread.Sleep(300);
-
-            for (int i = 0; i < threadCount; i++) {
-                lock (threadParams[i].paramsLock) {
-                    threadParams[i].stopSignal = true;
-                }
+            while (pointsToCount > 0) {
+                Point[] batch;
+                while (!readQueue.TryDequeue(out batch)) 
+                    Thread.Sleep(5);
+                for (int j = 0; j < batch.Length; j++)
+                    testCounts[GetChunk(batch[j])]++;
+                pointsToCount -= (uint)batch.Length;
+                Debug.Log($"{pointsToCount} points left to count");
             }
 
-            for (int i = 0; i < threadCount; i++)
-                countThreads[i].Join();
+            // for (int i = 0; i < threadCount; i++) {
+            //     lock (threadParams[i].paramsLock) {
+            //         threadParams[i].stopSignal = true;
+            //     }
+            // }
+
+            // for (int i = 0; i < threadCount; i++)
+            //     countThreads[i].Join();
 
             Debug.Log("Joined");
 
@@ -215,10 +239,6 @@ namespace FastPoints {
 
             // Debug.Log("C6");
 
-            Debug.Log("Chunks are:");
-            for (int i = 0; i < chunkPaths.Count; i++)
-                Debug.Log($"Chunk {i} at path {chunkPaths[i]} with bbox {chunkBBox[i].ToString()}");
-
             // throw new Exception();
 
             // START WRITING CHUNKS
@@ -230,6 +250,14 @@ namespace FastPoints {
                 Directory.Delete(targetDir, true);
             Directory.CreateDirectory($"{targetDir}");
             Directory.CreateDirectory($"{targetDir}/chunks");
+
+            Debug.Log("Chunks are:");
+            FileStream[] chunkStreams = new FileStream[chunkPaths.Count];
+            for (int i = 0; i < chunkPaths.Count; i++) {
+                chunkStreams[i] = File.OpenWrite(chunkPaths[i]);
+                Debug.Log($"Chunk {i} at path {chunkPaths[i]} with bbox {chunkBBox[i].ToString()}");
+            }
+
 
             ThreadedWriter chunkWriter = new ThreadedWriter(1);
 
@@ -261,52 +289,54 @@ namespace FastPoints {
                         Vector3 min = chunkBBox[i].Min;
                         Vector3 max = chunkBBox[i].Max;
 
-                        foreach (Point p in sorted[i]) {
-                            if (!chunkBBox[i].InAABB(p.pos))
-                                Debug.LogError($"Chunking found points outside bbox for {chunkPaths[i]}");
-                            else if (i == 76 && Mathf.Abs(p.pos.x - 8.98805f) < 0.00001f && Mathf.Abs(p.pos.y - 0.3535893f) < 0.00001f && Mathf.Abs(p.pos.z - -1.575418f) < 0.0001f) {
-                                Debug.Log("Heretest");
-                                float z_diff = p.pos.z - -1.575418f;
-                                chunkBBox[i].InAABB(p.pos);
-                            }
+                        // foreach (Point p in sorted[i]) {
+                        //     if (!chunkBBox[i].InAABB(p.pos))
+                        //         Debug.LogError($"Chunking found points outside bbox for {chunkPaths[i]}");
+                        //     else if (i == 76 && Mathf.Abs(p.pos.x - 8.98805f) < 0.00001f && Mathf.Abs(p.pos.y - 0.3535893f) < 0.00001f && Mathf.Abs(p.pos.z - -1.575418f) < 0.0001f) {
+                        //         Debug.Log("Heretest");
+                        //         float z_diff = p.pos.z - -1.575418f;
+                        //         chunkBBox[i].InAABB(p.pos);
+                        //     }
 
-                            if (Path.GetFileNameWithoutExtension(chunkPaths[i]) == "r245")
-                                r245Points.Add(p);
+                        //     if (Path.GetFileNameWithoutExtension(chunkPaths[i]) == "r245")
+                        //         r245Points.Add(p);
 
-                        }
-                        // chunkStreams[i].WriteAsync(Point.ToBytes(sorted[i].ToArray()));
-                        chunkWriter.Write(chunkPaths[i], Point.ToBytes(sorted[i].ToArray()));
+                        // }
+                        // File.OpenWrite(chunkPaths[i]).WriteAsync(Point.ToBytes(sorted[i].ToArray()));
+                        chunkStreams[i].Write(Point.ToBytes(sorted[i].ToArray()));
+                        // chunkWriter.Write(chunkPaths[i], Point.ToBytes(sorted[i].ToArray()));
                         sorted[i].Clear();
                     }
 
                     pointsToWrite -= tup.batch.Length;
+                    Debug.Log($"{pointsToWrite} points left to write");
                 }
 
                 while (chunkWriter.BytesWritten < data.PointCount * 15)
                     Thread.Sleep(500);
 
-                r245Points.Sort();
-                foreach (Point pt in r245Points)
-                    Debug.Log($"r245: {pt.ToString()}");
+                // r245Points.Sort();
+                // foreach (Point pt in r245Points)
+                //     Debug.Log($"r245: {pt.ToString()}");
             });
 
             // Debug.Log("C7");
 
             // SORT POINTS
 
-            int GetChunk(Point p) {
-                Vector3 size = data.MaxPoint - data.MinPoint;
+            // int GetChunk(Point p) {
+            //     Vector3 size = data.MaxPoint - data.MinPoint;
 
-                float x_norm = (p.pos.x - data.MinPoint.x) / size.x;
-                float y_norm = (p.pos.y - data.MinPoint.y) / size.y;
-                float z_norm = (p.pos.z - data.MinPoint.z) / size.z;
+            //     float x_norm = (p.pos.x - data.MinPoint.x) / size.x;
+            //     float y_norm = (p.pos.y - data.MinPoint.y) / size.y;
+            //     float z_norm = (p.pos.z - data.MinPoint.z) / size.z;
 
-                int x = (int)Mathf.Min(x_norm * chunkGridSize, chunkGridSize-1);
-                int y = (int)Mathf.Min(y_norm * chunkGridSize, chunkGridSize-1);
-                int z = (int)Mathf.Min(z_norm * chunkGridSize, chunkGridSize-1);
+            //     int x = (int)Mathf.Min(x_norm * chunkGridSize, chunkGridSize-1);
+            //     int y = (int)Mathf.Min(y_norm * chunkGridSize, chunkGridSize-1);
+            //     int z = (int)Mathf.Min(z_norm * chunkGridSize, chunkGridSize-1);
 
-                return mortonIndices[x * chunkGridSize * chunkGridSize + y * chunkGridSize + z];
-            }
+            //     return mortonIndices[x * chunkGridSize * chunkGridSize + y * chunkGridSize + z];
+            // }
 
             int pointsToQueue = data.PointCount;
             while (pointsToQueue > 0) {

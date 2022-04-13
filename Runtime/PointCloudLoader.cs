@@ -44,6 +44,7 @@ namespace FastPoints {
         bool treeGeneratedOld = false;
         OctreeReader reader;
         bool readerRunning = false;
+        bool awaitingDecimated = false;
 
         public void Awake() {
             dispatcher = new Dispatcher();
@@ -108,8 +109,13 @@ namespace FastPoints {
 
                 if (!data.Init)
                     data.Initialize();
-                if (!data.DecimatedGenerated)
-                    _ = data.PopulateSparseCloud(decimatedCloudSize);
+                if (!data.DecimatedGenerated && !awaitingDecimated) {
+                    data.PopulateSparseCloud(decimatedCloudSize).ContinueWith((Task t) => { awaitingDecimated = false; });
+                    awaitingDecimated = true;
+                }
+
+                if (awaitingDecimated)
+                    return;
 
                 if (generateTree && !data.TreeGenerated) {
                     treeThread = new Thread(new ParameterizedThreadStart(BuildTreeThread));
@@ -141,13 +147,13 @@ namespace FastPoints {
             }
 
             for (int i = 0; i < actionsPerFrame; i++) {
-                if (data.TreeGenerated && readerRunning)
-                    reader.SetNodesToShow(toShow);
-                if (dispatcher.Count > 0) {
-                    Action action;
-                    dispatcher.TryDequeue(out action);
-                    action();
-                }
+                // if (data.TreeGenerated && readerRunning)
+                //     reader.SetNodesToShow(toShow);
+                // if (dispatcher.Count > 0) {
+                //     Action action;
+                //     dispatcher.TryDequeue(out action);
+                //     action();
+                // }
             }
 
             // if (!treeThread.IsAlive)
