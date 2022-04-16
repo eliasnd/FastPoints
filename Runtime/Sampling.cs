@@ -65,14 +65,14 @@ namespace FastPoints {
                 foreach (Node child in node.children)
                     if (child != null && !child.subsampled)
                         traverse(child, cb);
-                Debug.Log("Subsampling done");
+                // Debug.Log("Subsampling done");
                 cb(node);
             }
 
             traverse(node, (Node node) => {
                 try {
-                if (node.name == "n310")
-                    Debug.Log("n310");
+                if (node.name == "n37" || node.name == "n3")
+                    Debug.Log("n37");
                     
                 node.subsampled = true;
 
@@ -130,7 +130,10 @@ namespace FastPoints {
                             Debug.Log(e.Message);
                         }
 
-                    node.points = pointBuffer;
+                    for (int i = 0; i < node.pointCount; i++)
+                        node.points[i] = pointBuffer[i];
+
+                    ArrayPool<Point>.Shared.Return(pointBuffer);
                 }
                 else
                 {
@@ -154,9 +157,8 @@ namespace FastPoints {
                         int rejectedCount = 0;
 
                         for (int i = 0; i < child.pointCount; i++) {
-                            (int, double) cellIdx = ToCellIdx(child.points[i].pos);
-
                             try {
+                                (int, double) cellIdx = ToCellIdx(child.points[i].pos);
 
                                 bool isAccepted =
                                     child.pointCount < 100 ||
@@ -209,7 +211,7 @@ namespace FastPoints {
                             }
                         }
 
-                        ArrayPool<Point>.Shared.Return(child.points);
+                        // ArrayPool<Point>.Shared.Return(child.points);
 
                         if (rejectedCount == 0)
                             node.children[c] = null;
@@ -220,10 +222,11 @@ namespace FastPoints {
 
                             cb(child);
                         }
-
-                        node.points = accepted;
-                        node.pointCount = (uint)acceptedCount;
+                        
                     }
+
+                    node.points = accepted;
+                    node.pointCount = (uint)acceptedCount;
                 }
                 } catch (Exception e) {
                     Debug.Log($"Exception. Message: {e.Message}, Backtrace: {e.StackTrace}, Inner: {e.InnerException}");

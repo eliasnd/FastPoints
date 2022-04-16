@@ -79,31 +79,25 @@ namespace FastPoints {
 
             int pointCount = (int)new FileInfo(chunkPath).Length / 15;
             Point[] points = pointPool.Rent(pointCount);    // RENT_0
-            Point.ToPoints(File.ReadAllBytes(chunkPath), points);
-
-            // if (Path.GetFileNameWithoutExtension(chunkPath) == "r245") {
-            //     List<Point> ptList = new(points);
-            //     ptList.Sort();
-            //     foreach (Point pt in ptList)
-            //         Debug.Log($"Read r245: {pt.ToString()}");
-
-            // }
+            Point.ToPoints(File.ReadAllBytes(chunkPath), points, true);
 
             // root.bbox = new AABB(new Vector3(curr.Min.x-1E-5f, curr.Min.y-1E-5f, curr.Min.z-1E-5f), new Vector3(curr.Max.x+1E-5f, curr.Max.y+1E-5f, curr.Max.z+1E-5f));
             root.bbox = curr;
             root.name = "n";
             // Debug.Log(chunkPath + ", " + root.bbox.ToString());
 
-            for (int i = 0; i < pointCount; i++) {
-                Point pt = points[i];
-                if (!root.bbox.InAABB(pt.pos))
-                    Debug.LogError($"Chunk at {chunkPath} has point {pt.ToString()} outside bbox!");
-            }
+            CheckBBox(points, root.bbox, pointCount);
+
+            // for (int i = 0; i < pointCount; i++) {
+            //     Point pt = points[i];
+            //     if (!root.bbox.InAABB(pt.pos))
+            //         Debug.LogError($"Chunk at {chunkPath} has point {pt.ToString()} outside bbox!");
+            // }
 
             Stopwatch watch = new();
             watch.Start();
 
-            await IndexPoints(root, points, pointCount); 
+            IndexPoints(root, points, pointCount); 
 
             watch.Stop();
             pointPool.Return(points);   // RETURN_0
@@ -119,480 +113,271 @@ namespace FastPoints {
             // Debug.Log("Exit");
         }
 
-        public async Task IndexPoints(Node root, Point[] points, int pointCount) {
+        public void IndexPoints(Node root, Point[] points, int pointCount) {
             if (debug)
                 Debug.Log("I1");
-            // try {
-            //     CheckBBox(points, root.bbox);
-            // } catch (Exception e) {
-            //     Debug.LogError($"Currently at root name {root.name}, error {e.Message}");
-            // }
+            try {
+                CheckBBox(points, root.bbox, pointCount);
+            } catch (Exception e) {
+                Debug.LogError($"Currently at root name {root.name}, error {e.Message}");
+            }
 
-            Stopwatch watch = new Stopwatch();
-            TimeSpan currTime = new();
-            long i1 = watch.ElapsedMilliseconds - currTime.Milliseconds;
-            currTime = watch.Elapsed;
-            
-            // DEBUG_CODE
-            // Debug.Log(CheckBBox(points, root.bbox));
+            // Was in task before
+            int gridSize = (int)Mathf.Pow(2, treeDepth-1);
+            int gridTotal = gridSize * gridSize * gridSize;
 
-            long i2 = watch.ElapsedMilliseconds - currTime.Milliseconds;
-            currTime = watch.Elapsed;
+            int[] mortonIndices = new int[gridSize * gridSize * gridSize];
 
-            await Task.Run(async () =>
-            {
-                int gridSize = (int)Mathf.Pow(2, treeDepth-1);
-                int gridTotal = gridSize * gridSize * gridSize;
-                int threadBudget = Mathf.CeilToInt(points.Length / 4096f);
+            for (int x = 0; x < gridSize; x++)
+            for (int y = 0; y < gridSize; y++)
+            for (int z = 0; z < gridSize; z++)
+                mortonIndices[x * gridSize * gridSize + y * gridSize + z] = Utils.MortonEncode(z, y, x);
 
-                int[] mortonIndices = new int[gridSize * gridSize * gridSize];
+            int GetNode(Point p) {
+                float threshold = 1f / gridSize; // Used to calculate which index for each dimension
 
-                for (int x = 0; x < gridSize; x++)
-                for (int y = 0; y < gridSize; y++)
-                for (int z = 0; z < gridSize; z++)
-                    mortonIndices[x * gridSize * gridSize + y * gridSize + z] = Utils.MortonEncode(z, y, x);
+                int x = Mathf.Min(Mathf.FloorToInt(Mathf.InverseLerp(root.bbox.Min.x, root.bbox.Max.x, p.pos.x) / threshold), gridSize-1);
+                int y = Mathf.Min(Mathf.FloorToInt(Mathf.InverseLerp(root.bbox.Min.y, root.bbox.Max.y, p.pos.y) / threshold), gridSize-1);
+                int z = Mathf.Min(Mathf.FloorToInt(Mathf.InverseLerp(root.bbox.Min.z, root.bbox.Max.z, p.pos.z) / threshold), gridSize-1);
+                return mortonIndices[x * gridSize * gridSize + y * gridSize + z];
+            }
 
-                ComputeShader computeShader;
+            int[] nodeCounts = intPool.Rent(gridTotal); // RENT_1
+            for (int i = 0; i < gridTotal; i++)
+                nodeCounts[i] = 0;
 
-                // float[] minPoint = new float[] { root.bbox.Min.x-1E-5f, root.bbox.Min.y-1E-5f, root.bbox.Min.z-1E-5f };
-                // float[] maxPoint = new float[] { root.bbox.Max.x+1E-5f, root.bbox.Max.y+1E-5f, root.bbox.Max.z+1E-5f };
-                float[] minPoint = new float[] { root.bbox.Min.x, root.bbox.Min.y, root.bbox.Min.z };
-                float[] maxPoint = new float[] { root.bbox.Max.x, root.bbox.Max.y, root.bbox.Max.z };
+            for (int i = 0; i < pointCount; i++) {
+                nodeCounts[GetNode(points[i])]++;
+            }
 
+            int countSum = 0;
+            for (int i = 0; i < gridTotal; i++) {
+                countSum += nodeCounts[i];
+            }
+            if (countSum != pointCount)
+                Debug.Log("Count issue!");
 
-                // Action outputs
-                int[] nodeCounts = intPool.Rent(gridTotal); // RENT_1
-                int[] nodeStarts = intPool.Rent(gridTotal); // RENT_2
-                // Point[] sortedPoints = new Point[points.Length];
+            int[] nodeOffsets = intPool.Rent(gridTotal); // RENT_2
+            nodeOffsets[0] = 0;
+            for (int i = 1; i < gridTotal; i++)
+                nodeOffsets[i] = nodeOffsets[i-1] + nodeCounts[i-1];
 
-                long i3 = watch.ElapsedMilliseconds - currTime.Milliseconds;
-                currTime = watch.Elapsed;
+            if (nodeOffsets[gridTotal-1] + nodeCounts[gridTotal-1] != pointCount)
+                Debug.Log("Offset issue!");
 
-                // DEBUG_CODE
-                int GetChunk(Point p) {
-                    float threshold = 1f / gridSize; // Used to calculate which index for each dimension
+            int[] debugNodeOffsets = (int[])nodeOffsets.Clone();
 
-                    int x = Mathf.Min(Mathf.FloorToInt(Mathf.InverseLerp(root.bbox.Min.x, root.bbox.Max.x, p.pos.x) / threshold), gridSize-1);
-                    int y = Mathf.Min(Mathf.FloorToInt(Mathf.InverseLerp(root.bbox.Min.y, root.bbox.Max.y, p.pos.y) / threshold), gridSize-1);
-                    int z = Mathf.Min(Mathf.FloorToInt(Mathf.InverseLerp(root.bbox.Min.z, root.bbox.Max.z, p.pos.z) / threshold), gridSize-1);
-                    return mortonIndices[x * gridSize * gridSize + y * gridSize + z];
+            Point[] sortedPoints = pointPool.Rent(pointCount);  // RENT_3
+            for (int i = 0; i < pointCount; i++) {
+                int node = GetNode(points[i]);
+                int offset = nodeOffsets[node]++;
+                if (nodeOffsets[node] > pointCount)
+                    Debug.Log("Here");
+                if (offset > pointCount)
+                    Debug.Log("Here");
+                try {
+                    sortedPoints[offset] = points[i];
+                } catch (Exception e) {
+                    Debug.Log("Here");
                 }
-
-                int[] pointNodes = intPool.Rent(pointCount);    // RENT_3
-                for (int i = 0; i < pointCount; i++) {
-                    pointNodes[i] = GetChunk(points[i]);
-                    nodeCounts[pointNodes[i]]++;
-                }
-
-                nodeStarts[0] = 0;
-                for (int i = 1; i < gridTotal; i++)
-                    nodeStarts[i] = nodeStarts[i-1] + nodeCounts[i-1];
-
-                int[] nodeOffsets = intPool.Rent(gridTotal);    // RENT_4
-                for (int i = 0; i < gridTotal; i++)
-                    nodeOffsets[i] = 0;
-
-                Point[] sortedPoints = pointPool.Rent(pointCount);  // RENT_5
-                for (int i = 0; i < pointCount; i++) {
-                    int node = pointNodes[i];
-                    int idx = nodeStarts[node] + nodeOffsets[node];
-                    sortedPoints[idx] = points[i];
-                    nodeOffsets[node]++;
-                }
-
-                if (debug)
-                    Debug.Log("I2");
-
-                long i4 = watch.ElapsedMilliseconds - currTime.Milliseconds;
-                currTime = watch.Elapsed;
-
-                // MAKE SUM PYRAMID
-
-                int[][] sumPyramid = new int[treeDepth][];
-                sumPyramid[treeDepth-1] = nodeCounts;
-
-                for (int level = treeDepth-2; level >= 0; level--) {
-                    int levelDim = (int)Mathf.Pow(2, level);
-                    int[] currLevel = new int[levelDim * levelDim * levelDim];
-
-                    int[] lastLevel = sumPyramid[level+1];
-
-                    for (int x = 0; x < levelDim; x++)
-                        for (int y = 0; y < levelDim; y++)
-                            for (int z = 0; z < levelDim; z++)
-                            {
-                                int chunkIdx = Convert.ToInt32(Utils.MortonEncode(z, y, x));
-                                // Debug.Log($"Test: Morton code for {x}, {y}, {z} = {chunkIdx}");
-                                int childIdx = Convert.ToInt32(Utils.MortonEncode(2*z, 2*y, 2*x));
-                                currLevel[chunkIdx] =
-                                    lastLevel[childIdx] + lastLevel[childIdx+1] + lastLevel[childIdx+2] + lastLevel[childIdx+3] +
-                                    lastLevel[childIdx+4] + lastLevel[childIdx+5] + lastLevel[childIdx+6] + lastLevel[childIdx+7];
-                            }
-
-                    sumPyramid[level] = currLevel;
-                }
-
-                int[][] offsetPyramid = new int[treeDepth][];
-                for (int l = 0; l < treeDepth; l++)
-                {
-                    int currOffset = 0;
-                    offsetPyramid[l] = new int[sumPyramid[l].Length];
-                    for (int i = 0; i < offsetPyramid[l].Length; i++)
-                    {
-                        offsetPyramid[l][i] = currOffset;
-                        currOffset += sumPyramid[l][i];
-                    }
-                }
-
-                long i5 = watch.ElapsedMilliseconds - currTime.Milliseconds;
-                currTime = watch.Elapsed;
-
-                // TEST SORTING
-
-                // DEBUG_CODE for constructing sorted pyramid and testing if node offset linear stuff matches
-                uint[] testCounts = new uint[gridTotal];
-                AABB[] leafBB = root.bbox.Subdivide(gridSize);
-
-                // for (int i = 0; i < gridTotal; i++)
-                //     Debug.Log(CheckBBox(sortedNodesCPU[i].ToArray(), leafBB[i]));
-
-                // float threshold = 1f / gridSize;
-                // foreach (Point pt in points) {
-                //     int x = Mathf.Min(Mathf.FloorToInt(Mathf.InverseLerp(root.bbox.Min.x, root.bbox.Max.x, pt.pos.x) / threshold), gridSize-1);
-                //     int y = Mathf.Min(Mathf.FloorToInt(Mathf.InverseLerp(root.bbox.Min.y, root.bbox.Max.y, pt.pos.y) / threshold), gridSize-1);
-                //     int z = Mathf.Min(Mathf.FloorToInt(Mathf.InverseLerp(root.bbox.Min.z, root.bbox.Max.z, pt.pos.z) / threshold), gridSize-1);
-                //     // return 0 |= splitBy3(x) | splitBy3(y) << 1 | splitBy3(z) << 2;
-                //     int idx = mortonIndices[x * gridSize * gridSize + y * gridSize + z];
-                //     if (Vector3.Max(pt.pos, leafBB[idx].Max) != leafBB[idx].Max || Vector3.Min(pt.pos, leafBB[idx].Min) != leafBB[idx].Min)
-                //         Debug.LogError("Found point outside");
-                //     testCounts[idx]++;
-                // }
-
-                uint offset = 0;
-                for (int i = 0; i < gridTotal; i++) {
-                    int size = sumPyramid[treeDepth-1][i];
-                    for (int j = 0; j < size; j++) {
-                        // if (Vector3.Max(sortedPoints[offset].pos, leafBB[i].Max) != leafBB[i].Max || Vector3.Min(sortedPoints[offset].pos, leafBB[i].Min) != leafBB[i].Min)
-                        //     Debug.LogError("Found point outside");
-                        offset++;
-                    }
-                }
-
-                AABB[][] bboxPyramid = new AABB[treeDepth][];
-                for (int l = 0; l < treeDepth; l++)
-                    bboxPyramid[l] = root.bbox.Subdivide((int)Mathf.Pow(2,l));
-
-                // List<Point>[][] cpuSortedPyramid = new List<Point>[treeDepth][];
-                // cpuSortedPyramid[treeDepth-1] = sortedNodesCPU;
-                // for (int l = treeDepth-2; l >= 0; l--) {
-                //     cpuSortedPyramid[l] = new List<Point>[(int)Mathf.Pow(8, l)];
-                //     for (int n = 0; n < cpuSortedPyramid[l].Length; n++) {
-                //         cpuSortedPyramid[l][n] = new();
-                //         for (int child = 0; child < 8; child++)
-                //             cpuSortedPyramid[l][n].AddRange(cpuSortedPyramid[l+1][n*8+child]);
-                //     }
-                // }
-
-                if (debug)
-                    Debug.Log("I3");
-
-                // for (int l = 0; l < treeDepth; l++)
-                //     for (int n = 0; n < cpuSortedPyramid[l].Length; n++)
-                //         CheckBBox(cpuSortedPyramid[l][n].ToArray(), bboxPyramid[l][n]);
-
-                // AABB[][] bboxPyramidAlt = new AABB[treeDepth][];
-                // bboxPyramidAlt[0] = new AABB[] { root.bbox };
-                // for (int l = 1; l < treeDepth; l++) {
-                //     bboxPyramidAlt[l] = new AABB[(int)Mathf.Pow(8, l)];
-                //     for (int n = 0; n < bboxPyramidAlt[l-1].Length; l++)
-                //         for (int i = 0; i < 8; i++)
-                //             bboxPyramidAlt[l][n*8+i] = bboxPyramidAlt[l-1][n].child(i);
-                // }
-                    
-
-                // CREATE NODE REFERENCES
-
-                List<NodeReference> nodeRefs = new();
-
-                NodeReference rootRef = new NodeReference();
-                rootRef.name = "";
-                rootRef.level = 0;
-                rootRef.x = 0;
-                rootRef.y = 0;
-                rootRef.z = 0;
-                rootRef.pointCount = (uint)sumPyramid[0][0];
-
-                Stack<NodeReference> stack = new();
-                stack.Push(rootRef);
-
-                int c = 0;
-                while (stack.Count > 0) {
-                    c++;
-                    NodeReference nr = stack.Pop();
-                    int nodeIdx = Utils.MortonEncode(nr.z, nr.y, nr.x);
-                    uint numPoints = (uint)sumPyramid[nr.level][nodeIdx];
-                    if (nr.level == treeDepth-1) {
-                        if (numPoints > 0)
-                            nodeRefs.Add(nr);
-                    } else if (numPoints > maxNodeSize) {
-                        int childIdx = Utils.MortonEncode(2*nr.z, 2*nr.y, 2*nr.x);
-                        for (int i = 0; i < 8; i++) {
-                            uint count = (uint)sumPyramid[nr.level+1][childIdx+i];
-
-                            if (count > 0) {
-                                NodeReference child = new();
-                                child.level = nr.level+1;
-                                child.name = nr.name + i;
-                                child.offset = (uint)offsetPyramid[nr.level + 1][childIdx+i];
-                                // Debug.Log($"Made node {child.name} with level {child.level}, idx {childIdx+i}");
-                                child.pointCount = count;
-                                // child.bbox = bboxPyramid[nr.level + 1][childIdx+i];
-                                
-                                child.x = 2 * nr.x + ((i & 0b100) >> 2);
-                                child.y = 2 * nr.y + ((i & 0b010) >> 1);
-                                child.z = 2 * nr.z + ((i & 0b001) >> 0);
-
-                                if (Utils.MortonEncode(child.z, child.y, child.x) != childIdx+i)
-                                    Debug.LogError($"Mismatch: computed {Utils.MortonEncode(child.z, child.y, child.x)}, should be {childIdx+i}");
-
-                                stack.Push(child);
-                            }
-                        }
-                    } else if (numPoints > 0) {
-                        nodeRefs.Add(nr);
-                    }
-                }
-
-                long i6 = watch.ElapsedMilliseconds - currTime.Milliseconds;
-                currTime = watch.Elapsed;
-                if (debug)
-                    Debug.Log("I6");
-
-                // CREATE NODES
-
-                Node ExpandReference(NodeReference nr)
-                {
-                    string startName = root.name;
-                    string fullName = startName + nr.name;
-
-                    Node currNode = root;
-                    for (int i = startName.Length; i < fullName.Length; i++)
-                    {
-                        int idx = fullName[i] - '0';
-
-                        if (currNode.children[idx] == null)
-                        {
-                            Node child = new();
-                            // child.bbox = currNode.bbox.Subdivide(2)[idx];
-                            child.bbox = currNode.bbox.child(idx);
-                            // child.bbox = bboxPyramid[nr.level][Utils.MortonEncode(nr.z, nr.y, nr.x)];
-                            child.name = currNode.name + idx;
-                            child.children = new Node[8];
-
-                            currNode.children[idx] = child;
-                            currNode = child;
-                        } else
-                        {
-                            currNode = currNode.children[idx];
-                        }
-                    
-                    }
-
-                    bboxPyramid = bboxPyramid; // DEBUG_CODE
-
-                    return currNode;
-                }
-
-                List<Task> recursiveCalls = new();
-
-                foreach (NodeReference nr in nodeRefs)
-                {
-                    Node node = ExpandReference(nr);
-                    node.pointCount = nr.pointCount;
-                    // node.points = new Point[node.pointCount];
-
-                    // node.bbox = nr.bbox;
-
-                    // Array.Copy(points, nr.offset, node.points, 0, nr.pointCount);
-
-                    // DEBUG_CODE
-                    if (nr == null)
-                        Debug.Log("HEre");
-                    if (nr.name == null)
-                        Debug.Log("Here");
-
-                    // node.points = cpuSortedPyramid[nr.level][Utils.MortonEncode(nr.z, nr.y, nr.x)].ToArray();
-                    if (node.name == "n310")
-                        Debug.Log("n310");
-                    node.points = pointPool.Rent((int)node.pointCount); // RENT_6
-                    int nodeOffset = offsetPyramid[nr.level][Utils.MortonEncode(nr.z, nr.y, nr.x)];
-                    for (int i = 0; i < node.pointCount; i++)
-                        node.points[i] = sortedPoints[nodeOffset+i];
-                    // Debug.Log($"Got points for {node.name} from idx {Utils.MortonEncode(nr.z, nr.y, nr.x)}");
-
-                    // if (node.points.Length != node.pointCount)
-                    //     Debug.LogError("Biiig!");
-                    
-                    // foreach (Point pt in node.points)
-                    //     if (!cpuSortedPyramid[l][idx].Contains(pt))
-                    //         Debug.LogError("Mismatch in CPU and GPU");
-
-                    // Debug.Log("Expand: " + CheckBBox(node.points, node.bbox));
-
-                    // Debug.Log($"Created node {node.name} with bbox ({node.bbox.Min.x}, {node.bbox.Min.y}, {node.bbox.Min.z}), ({node.bbox.Max.x}, {node.bbox.Max.y}, {node.bbox.Max.z})");
-                    Vector3 min = new Vector3(float.MaxValue, float.MaxValue, float.MaxValue);
-                    Vector3 max = new Vector3(float.MinValue, float.MinValue, float.MinValue);
-                    foreach (Point pt in node.points) {
-                        min = Vector3.Min(min, pt.pos);
-                        max = Vector3.Max(max, pt.pos);
-                        /* if (Vector3.Min(node.bbox.Min, pt.pos) != node.bbox.Min || Vector3.Max(node.bbox.Max, pt.pos) != node.bbox.Max)
-                        Debug.LogError($"Found point ({pt.pos.x}, {pt.pos.y}, {pt.pos.z}) outside bbox in node {node.name}"); */
-                    }
-
-                    if (node.pointCount > maxNodeSize)
-                        recursiveCalls.Add(IndexPoints(node, node.points, (int)node.pointCount));
-                }
-
-                Task.WaitAll(recursiveCalls.ToArray());
-
-                long i7 = watch.ElapsedMilliseconds - currTime.Milliseconds;
-                currTime = watch.Elapsed;
-
-                if (debug)
-                    Debug.Log("I7");
-
-                // POPULATE INNER NODES
-
-                // void traverse(Node node, Action<Node> cb) {
-                //     foreach (Node child in node.children)
-                //         if (child != null)
-                //             traverse(child, cb);
-                //     cb(node);
-                // }
-
-                // traverse(root, (Node n) => {
-                //     for (int c = 0; c < 8; c++) {
-                //         if (n.children[c] != null)
-                //             if (Vector3.Min(n.children[c].bbox.Min, n.bbox.Min) != n.bbox.Min || Vector3.Max(n.children[c].bbox.Max, n.bbox.Max) != n.bbox.Max)
-                //                 throw new Exception("Issue!");
-                //     }
-                // });
-
-                //await SubsampleNode(root, qw, rand);
-                Sampling.Sample(root, (Node node) => {
-                    Debug.Log("In callback");
-                    node.offset = (uint)qw.Enqueue(Point.ToBytes(node.points, 0, (int)node.pointCount));
-                    pointPool.Return(node.points);  // RETURN_6
-                    node.points = null;
-                });
-
-                if (!root.IsLeaf)
-                    Debug.Log("Done sampling");
-
                 
+            }
 
-                // traverse(root, (Node n) => { n.children = null; });
+            points = sortedPoints;
+            pointPool.Return(sortedPoints); // RETURN_3
 
-                long i8 = watch.ElapsedMilliseconds - currTime.Milliseconds;
+            if (debug)
+                Debug.Log("I2");
 
-                if (debug)
-                    Debug.Log($"I8");
 
-                intPool.Return(nodeCounts); // RETURN_1
-                intPool.Return(nodeStarts); // RETURN_2
-                intPool.Return(pointNodes); // RETURN_3
-                intPool.Return(nodeOffsets);    // RETURN_4
-                pointPool.Return(sortedPoints); // RETURN_5
+            // MAKE SUM PYRAMID
 
-                if (debug)
-                    Debug.Log($"I9");
-            });
+            int[][] sumPyramid = new int[treeDepth][];
+            sumPyramid[treeDepth-1] = nodeCounts;
+
+            int[][] offsetPyramid = new int[treeDepth][];
+            offsetPyramid[treeDepth-1] = new int[gridTotal];
+            offsetPyramid[treeDepth-1][0] = 0;
+
+            for (int i = 1; i < gridTotal; i++)
+                offsetPyramid[treeDepth-1][i] = offsetPyramid[treeDepth-1][i-1] + nodeCounts[i-1];
+
+            int levelDim = gridSize / 2;
+
+            for (int level = treeDepth-2; level >= 0; level--) {
+                int[] currLevel = new int[levelDim * levelDim * levelDim];
+
+                int[] lastLevel = sumPyramid[level+1];
+
+                for (int x = 0; x < levelDim; x++)
+                    for (int y = 0; y < levelDim; y++)
+                        for (int z = 0; z < levelDim; z++)
+                        {
+                            int chunkIdx = Utils.MortonEncode(z, y, x);
+                            int childIdx = Utils.MortonEncode(2*z, 2*y, 2*x);
+                            currLevel[chunkIdx] =
+                                lastLevel[childIdx] + lastLevel[childIdx+1] + lastLevel[childIdx+2] + lastLevel[childIdx+3] +
+                                lastLevel[childIdx+4] + lastLevel[childIdx+5] + lastLevel[childIdx+6] + lastLevel[childIdx+7];
+                        }
+
+                sumPyramid[level] = currLevel;
+
+                int[] currOffsets = new int[levelDim * levelDim * levelDim];
+                currOffsets[0] = 0;
+                for (int i = 1; i < levelDim * levelDim * levelDim; i++)
+                    currOffsets[i] = currOffsets[i-1] + currLevel[i-1];
+                offsetPyramid[level] = currOffsets;
+
+                levelDim /= 2;
+            }
+
+            if (debug)
+                Debug.Log("I3");
+
+            // CREATE NODE REFERENCES
+
+            List<NodeReference> nodeRefs = new();
+
+            NodeReference rootRef = new NodeReference();
+            rootRef.name = "";
+            rootRef.level = 0;
+            rootRef.x = 0;
+            rootRef.y = 0;
+            rootRef.z = 0;
+            rootRef.pointCount = (uint)sumPyramid[0][0];
+
+            Stack<NodeReference> stack = new();
+            stack.Push(rootRef);
+
+            int c = 0;
+            while (stack.Count > 0) {
+                c++;
+                NodeReference nr = stack.Pop();
+
+                int nodeIdx = Utils.MortonEncode(nr.z, nr.y, nr.x);
+                uint numPoints = (uint)sumPyramid[nr.level][nodeIdx];
+
+                if (nr.level == treeDepth-1) {
+                    // If on maximum granularity for this pass
+                    if (numPoints > 0)
+                        nodeRefs.Add(nr);
+
+                } else if (numPoints > maxNodeSize) {
+                    // Create child nodes
+                    int childIdx = Utils.MortonEncode(2*nr.z, 2*nr.y, 2*nr.x);
+                    for (int i = 0; i < 8; i++) {
+                        int count = sumPyramid[nr.level+1][childIdx+i];
+
+                        if (count > 0) {
+                            NodeReference child = new();
+                            child.level = nr.level+1;
+                            child.name = nr.name + i;
+                            try {
+                                child.offset = (uint)offsetPyramid[nr.level + 1][childIdx+i];
+                            } catch (Exception e) {
+                                Debug.Log("Here");
+                            }
+                            // Debug.Log($"Made node {child.name} with level {child.level}, idx {childIdx+i}");
+                            child.pointCount = (uint)count;
+                            // child.bbox = bboxPyramid[nr.level + 1][childIdx+i];
+                            
+                            child.x = 2 * nr.x + ((i & 0b100) >> 2);
+                            child.y = 2 * nr.y + ((i & 0b010) >> 1);
+                            child.z = 2 * nr.z + ((i & 0b001) >> 0);
+
+                            stack.Push(child);
+                        }
+                    }
+                } else if (numPoints > 0) {
+                    // Create leaf node
+                    nodeRefs.Add(nr);
+                }
+            }
+
+            if (debug)
+                Debug.Log("I6");
+
+            // CREATE NODES
+
+            Node ExpandReference(NodeReference nr)
+            {
+                string startName = root.name;
+                string fullName = startName + nr.name;
+
+                Node currNode = root;
+                for (int i = startName.Length; i < fullName.Length; i++)
+                {
+                    int idx = fullName[i] - '0';
+
+                    if (currNode.children[idx] == null)
+                    {
+                        Node child = new();
+                        child.bbox = currNode.bbox.child(idx);
+                        child.name = currNode.name + idx;
+                        child.children = new Node[8];
+
+                        currNode.children[idx] = child;
+                        currNode = child;
+                    } else
+                    {
+                        currNode = currNode.children[idx];
+                    }
+                
+                }
+
+                return currNode;
+            }
+
+            List<Node> recursiveCalls = new();  // Parallelize with tasks eventually?
+
+            foreach (NodeReference nr in nodeRefs)
+            {
+                Node node = ExpandReference(nr);
+                node.pointCount = nr.pointCount;
+
+                node.points = pointPool.Rent((int)node.pointCount); // RENT_6
+                int nodeOffset = offsetPyramid[nr.level][Utils.MortonEncode(nr.z, nr.y, nr.x)];
+                for (int i = 0; i < node.pointCount; i++)
+                    node.points[i] = sortedPoints[nodeOffset+i];
+
+                if (node.pointCount > maxNodeSize)
+                    recursiveCalls.Add(node);
+
+                // if (node.name == "n377")
+                //     Debug.Log("Here");
+            }
+
+            foreach (Node node in recursiveCalls)
+                IndexPoints(node, node.points, (int)node.pointCount);
+
+
+            if (debug)
+                Debug.Log("I7");
+
+            Sampling.Sample(root, (Node node) => {
+                // if (node.name == "n37")
+                //     Debug.Log("Here");
+                node.offset = (uint)qw.Enqueue(Point.ToBytes(node.points, 0, (int)node.pointCount));
+                pointPool.Return(node.points);  // RETURN_6
+                node.points = null;
+            });  
+
+
+            intPool.Return(nodeCounts); // RETURN_1
+            intPool.Return(nodeOffsets); // RETURN_2
+
+            if (debug)
+                Debug.Log($"I8");
         }
 
-        void CheckBBox(Point[] points, AABB bbox) {
-            foreach (Point pt in points)
-                if (!bbox.InAABB(pt.pos))
-                    throw new Exception($"BBox check on {bbox.ToString()} failed on ({pt.pos.x}, {pt.pos.y}, {pt.pos.z})");
+        void CheckBBox(Point[] points, AABB bbox, int pointCount=0) {
+            if (pointCount == 0)
+                pointCount = points.Length;
+            for (int i = 0; i < pointCount; i++)
+                if (!bbox.InAABB(points[i].pos))
+                    throw new Exception($"BBox check on {bbox.ToString()} failed on ({points[i].pos.x}, {points[i].pos.y}, {points[i].pos.z})");
 
             // return $"BBox check on {bbox.ToString()} passed";
-        }
-
-        // Subsamples and writes node
-        public static async Task SubsampleNode(Node node, QueuedWriter qw, Random rand)
-        {
-            await Task.Run(() =>
-            {
-                if (node.IsLeaf || node.subsampled)
-                    return;
-
-                // Should do space constraint or something
-
-                /* Point[] newPoints = new Point[subsampleSize];
-                for (int i = 0; i < subsampleSize; i++)
-                    newPoints[i] = node.points[rand.Next(0, (int)node.pointCount)];
-
-                node.pointCount = (uint)subsampleSize; */
-
-                List<Task> childTasks = new();
-
-                for (int i = 0; i < 8; i++)
-                    if (node.children[i] != null)
-                        childTasks.Add(SubsampleNode(node.children[i], qw, rand));
-
-                List<Point> newPoints = new List<Point>();
-
-                int budget = subsampleSize;
-                int[] childBudgets = new int[8];
-                for (int i = 0; i < 7; i++) {
-                    if (node.children[i].pointCount < budget / (8-i))
-                        childBudgets[i] = (int)node.children[i].pointCount;
-                    else
-                        childBudgets[i] = budget / (8-i);
-                    budget -= childBudgets[i];
-                }
-
-                childBudgets[7] = budget;
-
-                for (int i = 0; i < 8; i++) {
-                    if (childBudgets[i] == node.children[i].pointCount)
-                        newPoints.AddRange(node.children[i].points);
-                    else {
-                        Point[] childPoints = new Point[childBudgets[i]];
-                        for (int p = 0; p < childBudgets[i]; p++)
-                            newPoints.Add(node.children[i].points[p * (node.children[i].pointCount / childBudgets[i])]);
-                    }
-                }
-
-                node.points = newPoints.ToArray();
-                node.subsampled = true;
-
-                Task.WaitAll(childTasks.ToArray());
-
-                for (int i = 0; i < 8; i++)
-                    if (node.children[i] != null)
-                    {
-                        Node child = node.children[i];
-                        child.offset = (uint)qw.Enqueue(Point.ToBytes(child.points, 0, (int)child.pointCount));
-                        child.points = null;
-                    }
-            });
-        }
-
-        static async Task WriteNode(Node node, QueuedWriter qw)
-        {
-            await Task.Run(() =>
-            {
-                List<Task> childTasks = new();
-
-                for (int i = 0; i < 8; i++)
-                    if (node.children[i] != null)
-                        childTasks.Add(WriteNode(node.children[i], qw));
-
-                node.offset = (uint)qw.Enqueue(Point.ToBytes(node.points, 0, (int)node.pointCount));
-                node.points = null;
-
-                Task.WaitAll(childTasks.ToArray());
-            });
         }
     }
 }

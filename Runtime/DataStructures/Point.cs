@@ -60,11 +60,13 @@ namespace FastPoints {
             // Debug.Log("new tobytes done");
         }
 
-        public static void ToBytes(Point[] src, byte[] target, int offset = 0) {
-            if (target.Length != src.Length * 15)
+        public static void ToBytes(Point[] src, byte[] target, int offset = 0, bool ignoreLength=false) {
+            if (!ignoreLength && target.Length != src.Length * 15)
                 throw new Exception("Bytes array must be 15 times length of points array");
 
-            for (int p = 0; p < src.Length; p++) {
+            int length = ignoreLength ? target.Length / 15 : src.Length;
+
+            for (int p = 0; p < length; p++) {
                 Point pt = src[p];
 
                 int b = p * 15;
@@ -93,21 +95,18 @@ namespace FastPoints {
         }
 
         public static byte[] ToBytes(Point[] src, int offset=0, int count=0) {
-            byte[] bytes = new byte[src.Length*15];
-            ToBytes(src, bytes);
-            // Point[] debugPoints = Point.ToPoints(bytes);
             count = count == 0 ? src.Length : count;
-            // for (int i = 0; i < count; i++)
-                // if (!src[i].Equals(debugPoints[i]))
-                //     Debug.Log("Big problem!");
+            byte[] bytes = new byte[count*15];
+            ToBytes(src, bytes, offset, true);
             return bytes;
         }
 
-        public static void ToPoints(byte[] src, Point[] target) {
-            if (src.Length != target.Length * 15)
+        public static void ToPoints(byte[] src, Point[] target, bool ignoreLength=false) {
+            if (!ignoreLength && src.Length != target.Length * 15)
                 throw new Exception("Bytes array must be 15 times length of points array");
 
-            for (int i = 0; i < target.Length; i++) {
+            int length = ignoreLength ? src.Length / 15 : target.Length;
+            for (int i = 0; i < length; i++) {
                 int startIdx = i * 15;
                 target[i] = new Point(
                     new Vector3(

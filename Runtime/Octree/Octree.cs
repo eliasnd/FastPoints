@@ -117,8 +117,8 @@ namespace FastPoints {
 
                 this.bbox = new AABB(data.MinPoint, data.MaxPoint);
 
-                chunkTask = Chunker.MakeChunks(data, dirPath, dispatcher);
-                await chunkTask;
+                // chunkTask = Chunker.MakeChunks(data, dirPath, dispatcher);
+                // await chunkTask;
 
                 Debug.Log($"{name}: Chunking done");
 
@@ -202,13 +202,11 @@ namespace FastPoints {
                     }
 
                     Sampling.Sample(root, (Node node) => {
-                        if (node == root)
-                            node = root;
-                        node.offset = (uint)qw.Enqueue(Point.ToBytes(node.points));
+                        node.offset = (uint)qw.Enqueue(Point.ToBytes(node.points, 0, (int)node.pointCount));
                         node.points = null;
                     });
 
-                    root.offset = (uint)qw.Enqueue(Point.ToBytes(root.points));
+                    root.offset = (uint)qw.Enqueue(Point.ToBytes(root.points, 0, (int)root.pointCount));
                     // root.points = null;
 
                     void traverse(Node node, Action<Node> cb) {
