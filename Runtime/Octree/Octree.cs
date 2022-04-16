@@ -38,23 +38,34 @@ namespace FastPoints {
             fs = File.OpenRead($"{dirPath}/octree.dat");
 
             // Construct empty tree hierarchy
-            /* root = nodes[0].ToNode();
+            root = nodes[0].ToNode();
 
-            // At end of expandEntry call, idx is on last descendent of root
+            // At end of expandEntry call, idx is just past last descendent of root
             void expandEntry(Node root, ref int idx) {
                 int rootIdx = idx;
                 NodeEntry entry = nodes[rootIdx];
+                idx++;
 
-                for (int i = 0; i < 8; i++)
-                    if (entry.childFlags[i]) {
-                        idx++;
-                        Node child = nodes[idx].ToNode();
-                        expandEntry(child, ref idx);
-                    }
+                if (entry.descendentCount == 0)
+                    return;
+
+                for (int i = 0; i < 8; i++) {
+                    Node child = nodes[idx].ToNode();
+                    int childIdx = 
+                        (child.bbox.Min.x == entry.bbox.Min.x ? 0 : 4) + 
+                        (child.bbox.Min.y == entry.bbox.Min.y ? 0 : 2) + 
+                        (child.bbox.Min.z == entry.bbox.Min.z ? 0 : 1);
+
+                    root.children[childIdx] = child;
+                    expandEntry(child, ref idx);
+
+                    if (idx > rootIdx + entry.descendentCount) // No more children
+                        break;
+                }
             }
 
             int idx = 0;
-            expandEntry(root, ref idx); */
+            expandEntry(root, ref idx);
         }
 
         // Get masks separately from points to avoid needless IO
