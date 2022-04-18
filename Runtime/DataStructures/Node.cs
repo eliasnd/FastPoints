@@ -26,7 +26,7 @@ namespace FastPoints {
             }
         }
 
-        
+        public bool IsVisible;
     }
 
     public class NodeReference

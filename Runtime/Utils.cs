@@ -40,6 +40,8 @@ namespace FastPoints {
         }
 
         public static bool TestPlanesAABB(Plane[] frustum, AABB box) {
+            if (frustum == null)
+                Debug.LogError("Frustum null!");
             bool inside;
 
             float lx = box.Min.x;

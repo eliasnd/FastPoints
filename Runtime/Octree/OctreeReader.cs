@@ -2,227 +2,270 @@ using UnityEngine;
 
 using System;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Collections.Concurrent;
 using System.IO;
-using System.Linq;
+using System.Collections.Generic;
 
 namespace FastPoints {
 
     public class OctreeReader {
         static int[] nodesToShow = new int[] {7, 8, 9, 10, 11, 12, 13};
-        Thread maskerThread;
-        OctreeMaskerParams maskerParams;
-        Thread readerThread;
-        OctreeReaderParams readerParams;
+        Thread loaderThread;
+        OctreeLoaderParams loaderParams;
+
+        Thread traversalThread;
+        OctreeTraversalParams traversalParams;
 
         PointCloudLoader loader;
 
         public OctreeReader(Octree tree, PointCloudLoader loader, Camera initCam) {
-            Debug.Log("Octree reader constructor");
             this.loader = loader;
 
-            ConcurrentQueue<int> toLoad = new();
-            ConcurrentQueue<int> toUnload = new();
             object paramsLock = new();
 
-            maskerThread = new Thread(new ParameterizedThreadStart(MaskOctree));
-            maskerParams = new OctreeMaskerParams {
+            loaderThread = new Thread(new ParameterizedThreadStart(LoadThread));
+            loaderParams = new OctreeLoaderParams {
+                paramsLock = paramsLock,
+                tree = tree,
+                stopSignal = false
+            };
+            loaderThread.Start(loaderParams);
+
+            traversalThread = new Thread(new ParameterizedThreadStart(TraverseThread));
+            traversalParams = new OctreeTraversalParams {
                 paramsLock = paramsLock,
                 tree = tree,
                 stopSignal = false,
-                toLoad = toLoad,
-                toUnload = toUnload,
-                nodesToShow = new int[0]
+                visiblePoints = new()
             };
+            traversalThread.Start(traversalParams);
+
             SetCamera(initCam);
-            maskerThread.Start(maskerParams);
-
-            readerThread = new Thread(new ParameterizedThreadStart(ReadOctree));
-            readerParams = new OctreeReaderParams {
-                paramsLock = paramsLock,
-                tree = tree,
-                stopSignal = false,
-                toLoad = toLoad,
-                toUnload = toUnload
-            };
-            readerThread.Start(readerParams);
-
-            Debug.Log("Done octree reader");
         }
 
         // Call from main thread!
         public void SetCamera(Camera cam) {
-            lock (maskerParams.paramsLock) {
-                maskerParams.frustum = GeometryUtility.CalculateFrustumPlanes(cam.projectionMatrix * cam.worldToCameraMatrix * loader.transform.localToWorldMatrix);
-                maskerParams.camPosition = cam.transform.position;
-                maskerParams.screenHeight = cam.pixelRect.height;
-                maskerParams.fov = cam.fieldOfView;
+            lock (traversalParams.paramsLock) {
+                traversalParams.frustum = GeometryUtility.CalculateFrustumPlanes(cam.projectionMatrix * cam.worldToCameraMatrix * loader.transform.localToWorldMatrix);
+                traversalParams.camPosition = cam.transform.position;
+                traversalParams.screenHeight = cam.pixelRect.height;
+                traversalParams.fov = cam.fieldOfView;
             }
-            Debug.Log($"Set camera position to {maskerParams.camPosition.ToString()}");
+        }
+
+        public List<Point> GetLoadedPoints() {
+            lock (traversalParams.paramsLock) {
+                return traversalParams.visiblePoints;
+            }
+        }
+
+        public List<AABB> GetVisibleBBs() {
+            lock (traversalParams.paramsLock) {
+                return traversalParams.visibleBBox;
+            }
         }
 
         public void StopReader() {
-            lock (maskerParams.paramsLock) {
-                maskerParams.stopSignal = true;
+            lock (loaderParams.paramsLock) {
+                loaderParams.stopSignal = true;
             }
-            lock (readerParams.paramsLock) {
-                readerParams.stopSignal = true;
-            }
-        }
-
-        public void SetNodesToShow(int[] nodesToShow) {
-            lock (maskerParams.nodesToShow) {
-                maskerParams.nodesToShow = nodesToShow;
-                foreach (int i in nodesToShow)
-                    maskerParams.toLoad.Enqueue(i);
+            lock (traversalParams.paramsLock) {
+                traversalParams.stopSignal = true;
             }
         }
 
-        static void MaskOctree(object obj) {
-            Debug.Log("Octree mask thread");
-            OctreeMaskerParams p = (OctreeMaskerParams)obj;
-            
+        static void LoadThread(object obj) {
+            OctreeLoaderParams p = (OctreeLoaderParams)obj;
+            FileStream fs = File.Open($"{p.tree.dirPath}/octree.dat", FileMode.Open, FileAccess.Read, FileShare.Read);
+
+            bool firstTime = true;
+
+            // Maybe use tasks?
+            void Traverse(Node n, bool onlyUnload = false) {
+                if (onlyUnload) {
+                    lock (n) {
+                        n.IsVisible = false;
+                        n.points = null;
+                    }
+                    for (int i = 0; i < 8; i++)
+                        if (n.children[i] != null)
+                            Traverse(n.children[i], true);
+                    return;
+                }
+
+                bool isVisible;
+                bool pointsNull;
+                lock (n) {
+                    isVisible = n.IsVisible;  
+                    pointsNull = n.points == null;
+                }
+                if (isVisible) {
+                    if (pointsNull) { // Load points
+                        byte[] pBytes = new byte[n.pointCount * 15];
+
+                        if (fs.Position != n.offset)
+                            fs.Seek(n.offset, SeekOrigin.Begin);
+                        fs.ReadAsync(pBytes, 0, (int)n.pointCount * 15).ContinueWith((Task t) => {
+                            Point[] points = Point.ToPoints(pBytes);
+                            lock (n) {
+                                n.points = points;
+                            }
+                        });
+                    } 
+
+                    for (int i = 0; i < 8; i++)
+                        if (n.children[i] != null)
+                            Traverse(n.children[i]);
+                } else {
+                    n.points = null;
+                    for (int i = 0; i < 8; i++)
+                        if (n.children[i] != null)
+                            Traverse(n.children[i], true);
+                }
+
+            }
+
+            void TraverseBFS(Node n, Queue<Node> toTraverse) {
+                if (firstTime)
+                    Debug.Log($"Traversing {n.name}");
+                bool isVisible;
+                bool pointsNull;
+                lock (n) {
+                    isVisible = n.IsVisible;  
+                    pointsNull = n.points == null;
+                }
+                if (isVisible) {
+                    if (pointsNull) { // Load points
+                        byte[] pBytes = new byte[n.pointCount * 15];
+
+                        if (fs.Position != n.offset)
+                            fs.Seek(n.offset, SeekOrigin.Begin);
+                        fs.ReadAsync(pBytes, 0, (int)n.pointCount * 15).ContinueWith((Task t) => {
+                            Point[] points = Point.ToPoints(pBytes);
+                            lock (n) {
+                                n.points = points;
+                            }
+                        });
+                    } 
+
+                    for (int i = 0; i < 8; i++)
+                        if (n.children[i] != null)
+                            toTraverse.Enqueue(n.children[i]);
+                } else {
+                    n.points = null;
+                    for (int i = 0; i < 8; i++)
+                        if (n.children[i] != null)
+                            Traverse(n.children[i], true);
+                }
+            }
 
             while (!p.stopSignal) {
-                bool[] mask;
-
-                if (p.nodesToShow.Length != 0) {
-                    continue;
+                Queue<Node> toTraverse = new();
+                toTraverse.Enqueue(p.tree.root);
+                int c = 0;
+                while (toTraverse.Count > 0) {
+                    c++;
+                    TraverseBFS(toTraverse.Dequeue(), toTraverse);
                 }
-
-                lock (p.paramsLock)
-                {
-                    mask = GetTreeMask(p.tree, p.frustum, p.camPosition, p.fov, p.screenHeight);
-                }
-
-                for (int i = 0; i < mask.Length; i++)
-                {
-                    if (!mask[i] && p.tree.nodes[i].points != null) {
-                        p.tree.nodes[i].points = null;
-                        // p.toUnload.Enqueue(i);
-                    } else if (mask[i] && p.tree.nodes[i].points == null)
-                        p.toLoad.Enqueue(i);
-                }
-
+                if (c > 1)
+                    firstTime = false;
                 Thread.Sleep(50);
-                    
             }
         }
 
-        // Get masks separately from points to avoid needless IO
-        public static bool[] GetTreeMask(Octree tree, Plane[] frustum, Vector3 camPosition, float fov, float screenHeight) {
-            Debug.Log($"Get tree mask. camPosition is {camPosition.ToString()}");
-            bool[] mask = new bool[tree.nodes.Length];
-            // Populate bool array with true if node is visible, false otherwise
-            int i = 0;
-            while (i < tree.nodes.Length) {
-                NodeEntry n = tree.nodes[i];
-                double distance = (n.bbox.Center - camPosition).magnitude;
-                double slope = Math.Tan(fov / 2 * Mathf.Deg2Rad);
-                double projectedSize = (screenHeight / 2.0) * (n.bbox.Size.magnitude / 2) / (slope * distance);
+        // Traverses tree, setting nodes to be loaded and removed
+        static void TraverseThread(object obj) {
+            OctreeTraversalParams p = (OctreeTraversalParams)obj;
+
+            bool usePointBudget = true;
+
+            bool ShouldRender(Node n) {
+                double distance = (n.bbox.Center - p.camPosition).magnitude;
+                double slope = Math.Tan(p.fov / 2 * Mathf.Deg2Rad);
+                double projectedSize = (p.screenHeight / 2.0) * (n.bbox.Size.magnitude / 2) / (slope * distance);
 
                 float minNodeSize = 10;
 
-                if (!Utils.TestPlanesAABB(frustum, n.bbox) || projectedSize < minNodeSize) { // If bbox outside camera or too small
-                    mask[i] = false;
-                    i += (int)tree.nodes[i].descendentCount + 1;
-                } else {    // Set to render and step into children
-                    mask[i] = true;
-                    i++;
+                if (!Utils.TestPlanesAABB(p.frustum, n.bbox) || projectedSize < minNodeSize) // If bbox outside camera or too small
+                    return false;
+                else 
+                    return true;
+
+            }
+
+            void Traverse(Node n, List<Point> target, List<AABB> bboxTarget) {
+                if (ShouldRender(n)) {
+                    lock (n) {
+                        n.IsVisible = true;
+                        if (n.points != null && (!usePointBudget || target.Count + n.pointCount < p.pointBudget)) {
+                            bboxTarget.Add(n.bbox);
+                            target.AddRange(n.points);
+                        }
+                    }
+                    for (int i = 0; i < 8; i++)
+                        if (n.children[i] != null)
+                            Traverse(n.children[i], target, bboxTarget);
+                } else {
+                    lock (n) {
+                        n.IsVisible = false;
+                    }
                 }
             }
 
-            return mask;
-        }
-
-
-        public static int CountVisiblePoints(Octree tree, bool[] mask) {
-            int sum = 0;
-            for (int i = 0; i < tree.nodes.Length; i++)
-                if (mask[i])
-                    sum += (int)tree.nodes[i].pointCount;
-            return sum;
-        }
-
-        
-
-        static void ReadOctree(object obj) {
-            Debug.Log("Octree read thread");
-            OctreeReaderParams p = (OctreeReaderParams)obj;
-            FileStream fs = File.Open($"{p.tree.dirPath}/octree.dat", FileMode.Open, FileAccess.Read, FileShare.Read);
-
-            int[] unloadCounts = new int[p.tree.nodes.Length];  // Unused
-
-            while (!p.stopSignal) {
-                Debug.Log("Read octree loop");
-                // Construct new point array and pass to compute shader
-
-                if (p.toLoad.Count > 0) {
-                    int n;
-                    while (!p.toLoad.TryDequeue(out n))
-                        Thread.Sleep(50);
-
-                    NodeEntry node = p.tree.nodes[n];
-
-                    if (node.points != null)
-                        continue;
-
-                    lock (node) {
-                        byte[] pBytes = new byte[node.pointCount * 15];
-
-                        if (fs.Position != node.offset)
-                            fs.Seek(node.offset, SeekOrigin.Begin);
-                        fs.Read(pBytes, 0, (int)node.pointCount * 15);
-                        node.points = Point.ToPoints(pBytes);
+            void TraverseBFS(Node n, Queue<Node> toTraverse, List<Point> target, List<AABB> bboxTarget) {
+                if (ShouldRender(n)) {
+                    lock (n) {
+                        n.IsVisible = true;
+                        if (n.points != null && (!usePointBudget || target.Count + n.pointCount < p.pointBudget)) {
+                            bboxTarget.Add(n.bbox);
+                            target.AddRange(n.points);
+                        }
                     }
-
-                    if (n == 0) {
-                        int[] xRangeCounts = new int[24];
-                        foreach (Point pt in node.points)
-                            xRangeCounts[12+Mathf.FloorToInt(pt.pos.x)]++;
-                        xRangeCounts = xRangeCounts;
+                    for (int i = 0; i < 8; i++)
+                        if (n.children[i] != null)
+                            toTraverse.Enqueue(n.children[i]);
+                } else {
+                    lock (n) {
+                        n.IsVisible = false;
                     }
                 }
+            }
 
-                // if (p.toUnload.Count > 0) {
-                //     // Probably do some caching here, check number with unloadCounts
-                //     int n;
-                //     while (!p.toUnload.TryDequeue(out n))
-                //         Thread.Sleep(50);
-
-                //     NodeEntry node = p.tree.nodes[n];
-                //     node.points = null;
-                //     Debug.Log($"Unloaded {n}");
-                // }
-                int loadedNodes = 0;
-                for (int i = 0; i < p.tree.nodes.Length; i++)
-                    if (p.tree.nodes[i].points != null)
-                        loadedNodes++;
-                Debug.Log($"Cycle, {loadedNodes} loaded nodes");
+            while (!p.stopSignal) {
+                List<Point> visibleTmp = new(p.pointBudget);
+                List<AABB> bboxTmp = new();
+                // Traverse(p.tree.root, visibleTmp, bboxTmp);    // Traverse tree
+                Queue<Node> toTraverse = new();
+                toTraverse.Enqueue(p.tree.root);
+                while (toTraverse.Count > 0) {
+                    TraverseBFS(toTraverse.Dequeue(), toTraverse, visibleTmp, bboxTmp);
+                }
+                lock (p.paramsLock) {
+                    p.visiblePoints = visibleTmp;
+                    p.visibleBBox = bboxTmp;
+                }
                 Thread.Sleep(50);
             }
         }
     }
 
-    public class OctreeMaskerParams {
+    public class OctreeTraversalParams {
         public object paramsLock;
         public Octree tree;
         public Plane[] frustum;
         public Vector3 camPosition;
         public float screenHeight;
         public float fov;
-        public bool[] currMask;
+        public int pointBudget = 2500000;
+        public List<Point> visiblePoints;
+        public List<AABB> visibleBBox;
         public bool stopSignal;
-        public ConcurrentQueue<int> toLoad;
-        public ConcurrentQueue<int> toUnload;
-        public int[] nodesToShow;
     }
 
-    public class OctreeReaderParams {
+    public class OctreeLoaderParams {
         public object paramsLock;
         public Octree tree;
-        public ConcurrentQueue<int> toLoad;
-        public ConcurrentQueue<int> toUnload;
         public bool stopSignal;
     }
 

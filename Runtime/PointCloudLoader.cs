@@ -23,7 +23,7 @@ namespace FastPoints {
         public int decimatedCloudSize = 1000000;
         public float pointSize = 1.5f;
         public int treeLevels = 5;
-        public int[] toShow;
+        public Camera cam = null;
         #endregion
 
         int actionsPerFrame = 2;
@@ -36,7 +36,6 @@ namespace FastPoints {
 
         #region rendering
         Thread readThread;
-        ReadTreeParams rp;
         ComputeBuffer pointBuffer;
         Material mat;
         #endregion
@@ -142,7 +141,8 @@ namespace FastPoints {
 
                 // readThread = new Thread(new ParameterizedThreadStart(ReadTreeThread));
                 // readThread.Start(new ReadTreeParams(tree, cam.projectionMatrix * cam.worldToCameraMatrix, pointBuffer, dispatcher, () => {}));
-                reader = new(tree, this, Camera.current == null ? Camera.main : Camera.current);
+                Camera c = (!cam) ? Camera.current ?? Camera.main : cam;
+                reader = new(tree, this, c);
                 readerRunning = true;
             }
 
@@ -173,33 +173,31 @@ namespace FastPoints {
         #endif
         }
 
+        public void OnDrawGizmosSelected() {
+            if (data && data.TreeGenerated) {
+                Gizmos.matrix = transform.localToWorldMatrix;
+                List<AABB> visibleBBs = reader.GetVisibleBBs();
+                foreach (AABB bbox in visibleBBs)
+                    Gizmos.DrawWireCube( bbox.Center, bbox.Size );
+            }
+        }
+
         public void OnRenderObject() {
             if (data == null)
                 return;
 
             if (data.TreeGenerated) {
                 Debug.Log("Render");
-                Camera cam = Camera.current == null ? Camera.main : Camera.current;
-                reader.SetCamera(cam);
+                Camera c = (!cam) ? Camera.current ?? Camera.main : cam;
+                reader.SetCamera(c);
                 
                 // Create new point buffer
-                Point[] loadedPoints;
-                if (toShow.Length == 0)
-                    loadedPoints = tree.GetLoadedPoints();
-                else {
-                    List<Point> loadedPointsList = new();
-                    foreach (int i in toShow) {
-                        loadedPointsList.AddRange(tree.nodes[i].points == null ? new Point[0] : tree.nodes[i].points);
-                    }
-                    loadedPoints = loadedPointsList.ToArray();
-                }
-                // Debug.Log($"Picked point {i} with {tree.nodes[i].pointCount} points, points is {tree.nodes[i].points != null}");
+                List<Point> loadedPoints = reader.GetLoadedPoints();         
                 
-                
-                if (loadedPoints.Length == 0)
+                if (loadedPoints.Count == 0)
                     return;
 
-                ComputeBuffer cb = new ComputeBuffer(loadedPoints.Length, Point.size);
+                ComputeBuffer cb = new ComputeBuffer(loadedPoints.Count, Point.size);
                 cb.SetData(loadedPoints);
 
                 mat.hideFlags = HideFlags.DontSave;
@@ -208,7 +206,7 @@ namespace FastPoints {
                 mat.SetMatrix("_Transform", transform.localToWorldMatrix);
                 mat.SetPass(0);
 
-                Graphics.DrawProceduralNow(MeshTopology.Points, loadedPoints.Length, 1);
+                Graphics.DrawProceduralNow(MeshTopology.Points, loadedPoints.Count, 1);
 
                 cb.Dispose();
             } else if (data.DecimatedGenerated) {
@@ -243,65 +241,6 @@ namespace FastPoints {
                 this.data = data;
                 this.dispatcher = dispatcher;
                 this.cb = cb;
-            }
-        }
-
-        static void ReadTreeThread(object obj) {
-            Debug.Log("Starting read thread");
-            ReadTreeParams p = (ReadTreeParams)obj;
-            Octree tree = p.tree;
-            Matrix4x4 mat = p.mat;
-            ComputeBuffer pointBuffer = p.pointBuffer;
-
-            // TEST AABB CULLING
-            // while (!p.stopSignal) {
-            //     Debug.Log(mat);
-            //     AABB bbox = new AABB(new Vector3(0,0,0), new Vector3(5,5,5));
-            //     Rect screenRect = bbox.ToScreenRect(p.mat);
-            //     Debug.Log(screenRect.ToString());
-            // }
-            // END TEST
-
-            // try {
-            //     bool[] lastMask = tree.GetTreeMask(mat);
-            //     while (!p.stopSignal) {
-            //         Debug.Log("Checking mask");
-            //         Thread.Sleep(30);  // Pick interval for updating mask 
-            //         bool[] mask = tree.GetTreeMask(mat);
-            //         int pointCount = Mathf.Min(tree.CountVisiblePoints(mask), pointBuffer.count);
-            //         if (!lastMask.Equals(mask)) {
-            //             Debug.Log("New mask");
-            //             if (pointCount > 0) {
-            //                 Debug.Log("Nonempty mask");
-            //                 pointBuffer.SetData(tree.ApplyTreeMask(mask), 0, 0, pointCount);
-            //             }
-            //             Interlocked.Exchange(ref p.pointCount, (long)pointCount);
-                        
-            //             lastMask = mask;
-            //         }
-            //     }
-            // } catch (Exception e) {
-            //     Debug.Log($"ReadThread Exception. Message: {e.Message}, Backtrace: {e.StackTrace}, Inner: {e.InnerException}");
-            // }
-        }
-
-        struct ReadTreeParams {
-            public Octree tree;
-            public Action cb;
-            public Matrix4x4 mat;
-            public ComputeBuffer pointBuffer;
-            public Dispatcher dispatcher;
-            public long pointCount;
-            public bool stopSignal;
-
-            public ReadTreeParams(Octree tree, Matrix4x4 mat, ComputeBuffer pointBuffer, Dispatcher dispatcher, Action cb) {
-                this.tree = tree;
-                this.mat = mat;
-                this.cb = cb;
-                this.pointCount = 0;
-                this.pointBuffer = pointBuffer;
-                this.dispatcher = dispatcher;
-                this.stopSignal = false;
             }
         }
     }

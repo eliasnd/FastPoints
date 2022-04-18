@@ -39,9 +39,11 @@ namespace FastPoints {
 
             // Construct empty tree hierarchy
             root = nodes[0].ToNode();
+            root.name = "n";
 
             // At end of expandEntry call, idx is just past last descendent of root
             void expandEntry(Node root, ref int idx) {
+                Debug.Log($"Node {root.name} at idx {idx}: Expanding");
                 int rootIdx = idx;
                 NodeEntry entry = nodes[rootIdx];
                 idx++;
@@ -51,21 +53,42 @@ namespace FastPoints {
 
                 for (int i = 0; i < 8; i++) {
                     Node child = nodes[idx].ToNode();
+
                     int childIdx = 
-                        (child.bbox.Min.x == entry.bbox.Min.x ? 0 : 4) + 
-                        (child.bbox.Min.y == entry.bbox.Min.y ? 0 : 2) + 
-                        (child.bbox.Min.z == entry.bbox.Min.z ? 0 : 1);
+                        (child.bbox.Min.x - entry.bbox.Min.x < 1E-3 ? 0 : 4) + 
+                        (child.bbox.Min.y - entry.bbox.Min.y < 1E-3 ? 0 : 2) + 
+                        (child.bbox.Min.z - entry.bbox.Min.z < 1E-3 ? 0 : 1);
+
+                    Debug.Log($"Node {root.name}: Got child {i} at idx {idx}, childIdx {childIdx}, has {nodes[idx].descendentCount} descendents");
+
+                    Debug.Log($"Child idx is {childIdx}");
+
+                    child.name = root.name + childIdx;
 
                     root.children[childIdx] = child;
                     expandEntry(child, ref idx);
 
+                    Debug.Log($"Node {root.name}: Expanded child {i}, now at idx {idx}");
+
                     if (idx > rootIdx + entry.descendentCount) // No more children
                         break;
                 }
+
+                Debug.Log($"Node {root.name}: Got all children");
             }
 
             int idx = 0;
             expandEntry(root, ref idx);
+
+            int CountNodes(Node n) {
+                int count = 0;
+                for (int i = 0; i < 8; i++)
+                    if (n.children[i] != null)
+                        count += CountNodes(n.children[i]) + 1;
+                return count;
+            }
+
+            Debug.Log($"Found {nodes.Length} nodeEntrys, made {CountNodes(root)} real nodes");
         }
 
         // Get masks separately from points to avoid needless IO
