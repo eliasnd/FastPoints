@@ -43,7 +43,7 @@ namespace FastPoints {
 
             // At end of expandEntry call, idx is just past last descendent of root
             void expandEntry(Node root, ref int idx) {
-                Debug.Log($"Node {root.name} at idx {idx}: Expanding");
+                // Debug.Log($"Node {root.name} at idx {idx}: Expanding");
                 int rootIdx = idx;
                 NodeEntry entry = nodes[rootIdx];
                 idx++;
@@ -59,22 +59,22 @@ namespace FastPoints {
                         (child.bbox.Min.y - entry.bbox.Min.y < 1E-3 ? 0 : 2) + 
                         (child.bbox.Min.z - entry.bbox.Min.z < 1E-3 ? 0 : 1);
 
-                    Debug.Log($"Node {root.name}: Got child {i} at idx {idx}, childIdx {childIdx}, has {nodes[idx].descendentCount} descendents");
+                    // Debug.Log($"Node {root.name}: Got child {i} at idx {idx}, childIdx {childIdx}, has {nodes[idx].descendentCount} descendents");
 
-                    Debug.Log($"Child idx is {childIdx}");
+                    // Debug.Log($"Child idx is {childIdx}");
 
                     child.name = root.name + childIdx;
 
                     root.children[childIdx] = child;
                     expandEntry(child, ref idx);
 
-                    Debug.Log($"Node {root.name}: Expanded child {i}, now at idx {idx}");
+                    // Debug.Log($"Node {root.name}: Expanded child {i}, now at idx {idx}");
 
                     if (idx > rootIdx + entry.descendentCount) // No more children
                         break;
                 }
 
-                Debug.Log($"Node {root.name}: Got all children");
+                // Debug.Log($"Node {root.name}: Got all children");
             }
 
             int idx = 0;
@@ -89,6 +89,58 @@ namespace FastPoints {
             }
 
             Debug.Log($"Found {nodes.Length} nodeEntrys, made {CountNodes(root)} real nodes");
+        }
+
+        // Checks if all nodes' points are within their bboxs and no overlapping regions on disk
+        public void VerifyTree() {
+            void traverse(Node node, Action<Node> cb) {
+                foreach (Node child in node.children)
+                    if (child != null)
+                        traverse(child, cb);
+                // Debug.Log("Subsampling done");
+                cb(node);
+            }
+
+            FileStream fs = File.Open($"{dirPath}/octree.dat", FileMode.Open, FileAccess.Read, FileShare.Read);
+
+            Debug.Log("Starting tree verification.\nChecking bboxs...");
+
+            // Check for all points in bbox
+            traverse(root, (Node n) => {
+                byte[] pBytes = new byte[n.pointCount * 15];
+                fs.Seek(n.offset, SeekOrigin.Begin);
+                fs.Read(pBytes, 0, (int)n.pointCount * 15);
+                Point[] points = Point.ToPoints(pBytes);
+                foreach (Point pt in points)
+                    if (!n.bbox.InAABB(pt.pos)) {
+                        Debug.LogError($"Node {n.name} has points outside bbox!");
+                        return;
+                    }
+                Debug.Log($"Node {n.name} bbox ok");
+            });
+
+            Debug.Log("BBox check done. Checking disk overlap...");
+
+            traverse(root, (Node n1) => {
+                bool overlaps = false;
+                traverse(root, (Node n2) => {
+                    if (n1.name == n2.name)
+                        return;
+
+                    if (
+                        n1.offset == n2.offset ||
+                        n1.offset < n2.offset && n1.offset + n1.pointCount * 15 > n2.offset ||
+                        n2.offset < n1.offset && n2.offset + n2.pointCount * 15 > n1.offset
+                    ) {
+                        Debug.LogError($"Node {n1.name} overlaps with node {n2.name}. {n1.name}: offset {n1.offset}, point count {n1.pointCount}; {n2.name}: offset {n2.offset}, point count {n2.pointCount}");
+                        overlaps = true;
+                    }
+                });
+                if (!overlaps)
+                    Debug.Log($"Node {n1.name} overlap ok");
+            });
+
+            Debug.Log("Disk overlap check done.");
         }
 
         // Get masks separately from points to avoid needless IO
@@ -174,13 +226,18 @@ namespace FastPoints {
 
                     List<Task> indexTasks = new();
 
+                    // indexTasks.Add(idxr.IndexChunk(data, chunkRoots[52], chunkPaths[52]));
+                    // Debug.Log($"Special chunk");
+
+                    // throw new Exception("Reached");
+
                     for (int i = 0; i < chunkPaths.Length; i++)
                     {
                         while (idxr.FootprintMB > 1024)
                             Thread.Sleep(50);
 
-                        await idxr.IndexChunk(data, chunkRoots[i], chunkPaths[i]);
-                        // indexTasks.Add(idxr.IndexChunk(data, chunkRoots[i], chunkPaths[i]));
+                        // await idxr.IndexChunk(data, chunkRoots[i], chunkPaths[i]);
+                        indexTasks.Add(idxr.IndexChunk(data, chunkRoots[i], chunkPaths[i]));
                         Debug.Log($"Landmark chunk {i}/{chunkPaths.Length}");
                         // Debug.Log($"{i} chunks added");
                     }

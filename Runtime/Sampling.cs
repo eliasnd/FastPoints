@@ -106,9 +106,6 @@ namespace FastPoints {
 
                     int idx = x * gridSize * gridSize + y * gridSize + z;
 
-                    if (idx > gridSize * gridSize * gridSize)
-                        Debug.LogError("Big.");
-
                     return ( idx, distance );
                 }
 
@@ -132,6 +129,10 @@ namespace FastPoints {
 
                     for (int i = 0; i < node.pointCount; i++)
                         node.points[i] = pointBuffer[i];
+
+                    for (int i = 0; i < node.pointCount; i++)
+                        if (!node.bbox.InAABB(node.points[i].pos))
+                            Debug.LogError($"LeafIssue at node {node.name}");
 
                     ArrayPool<Point>.Shared.Return(pointBuffer);
                 }
@@ -227,6 +228,10 @@ namespace FastPoints {
 
                     node.points = accepted;
                     node.pointCount = (uint)acceptedCount;
+
+                    for (int i = 0; i < node.pointCount; i++)
+                        if (!node.bbox.InAABB(node.points[i].pos))
+                            Debug.LogError($"InternalIssue at node {node.name}");
                 }
                 } catch (Exception e) {
                     Debug.Log($"Exception. Message: {e.Message}, Backtrace: {e.StackTrace}, Inner: {e.InnerException}");

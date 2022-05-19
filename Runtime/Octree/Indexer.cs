@@ -14,7 +14,7 @@ using Debug = UnityEngine.Debug;
 
 namespace FastPoints {
     public class Indexer {
-        bool debug = true;
+        bool debug = false;
 
         static int treeDepth = 3;
         static int maxNodeSize = 100000;
@@ -81,12 +81,18 @@ namespace FastPoints {
             Point[] points = pointPool.Rent(pointCount);    // RENT_0
             Point.ToPoints(File.ReadAllBytes(chunkPath), points, true);
 
+            for (int i = 0; i < pointCount; i++)
+                if (!curr.InAABB(points[i].pos))
+                    Debug.LogError($"ChunkIssue at chunk {Path.GetFileNameWithoutExtension(chunkPath)}");
+
             // root.bbox = new AABB(new Vector3(curr.Min.x-1E-5f, curr.Min.y-1E-5f, curr.Min.z-1E-5f), new Vector3(curr.Max.x+1E-5f, curr.Max.y+1E-5f, curr.Max.z+1E-5f));
             root.bbox = curr;
             root.name = "n";
             // Debug.Log(chunkPath + ", " + root.bbox.ToString());
 
+            Debug.Log($"Preliminary chunk test");
             CheckBBox(points, root.bbox, pointCount);
+            Debug.Log($"Preliminary chunk test done");
 
             // for (int i = 0; i < pointCount; i++) {
             //     Point pt = points[i];
@@ -340,15 +346,18 @@ namespace FastPoints {
                 for (int i = 0; i < node.pointCount; i++)
                     node.points[i] = sortedPoints[nodeOffset+i];
 
-                if (node.pointCount > maxNodeSize)
+                if (node.pointCount > maxNodeSize) {
+                    if (node.name == "n33")
+                        Debug.Log("n33");
                     recursiveCalls.Add(node);
+                }
 
                 // if (node.name == "n377")
                 //     Debug.Log("Here");
             }
 
-            foreach (Node node in recursiveCalls)
-                IndexPoints(node, node.points, (int)node.pointCount);
+            // foreach (Node node in recursiveCalls)
+            //     IndexPoints(node, node.points, (int)node.pointCount);
 
 
             if (debug)

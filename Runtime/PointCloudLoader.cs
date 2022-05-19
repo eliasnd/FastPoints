@@ -24,6 +24,13 @@ namespace FastPoints {
         public float pointSize = 1.5f;
         public int treeLevels = 5;
         public Camera cam = null;
+        public bool debugReader = false;
+        public string highlightedNode="";
+        public int maxOctreeRenderDepth = -1;
+        public int pointBudget = 1000000;
+        public bool showBBoxs = true;
+        public bool useNodesToShow = false;
+        public string[] nodesToShow;
         #endregion
 
         int actionsPerFrame = 2;
@@ -129,8 +136,10 @@ namespace FastPoints {
 
             if (data.TreeGenerated && !readerRunning) {
                 Debug.Log("init reader");
-                if (!tree.Loaded)
+                if (!tree.Loaded) {
                     tree.LoadTree();
+                    tree.VerifyTree();
+                }
 
                 int pointBudget = 10000000;
                 pointBuffer = new ComputeBuffer(pointBudget, Point.size);
@@ -174,11 +183,24 @@ namespace FastPoints {
         }
 
         public void OnDrawGizmosSelected() {
-            if (data && data.TreeGenerated) {
+            if (data && data.TreeGenerated && showBBoxs) {
                 Gizmos.matrix = transform.localToWorldMatrix;
-                List<AABB> visibleBBs = reader.GetVisibleBBs();
-                foreach (AABB bbox in visibleBBs)
-                    Gizmos.DrawWireCube( bbox.Center, bbox.Size );
+                List<(string, AABB)> visibleBBs = reader.GetVisibleBBs();
+                if (visibleBBs == null)
+                    return;
+
+                foreach ((string, AABB) pair in visibleBBs) {
+                    if (highlightedNode != "") {
+                        if (highlightedNode.Contains(pair.Item1) && pair.Item1.Length <= highlightedNode.Length) {
+                            if (pair.Item1 == highlightedNode)
+                                Handles.Label(transform.TransformPoint(pair.Item2.Center), pair.Item1);
+                            Gizmos.DrawWireCube( pair.Item2.Center, pair.Item2.Size );
+                        }
+                    } else {
+                        Handles.Label(transform.TransformPoint(pair.Item2.Center), pair.Item1);
+                        Gizmos.DrawWireCube( pair.Item2.Center, pair.Item2.Size );
+                    }
+                }
             }
         }
 
@@ -187,15 +209,34 @@ namespace FastPoints {
                 return;
 
             if (data.TreeGenerated) {
-                Debug.Log("Render");
-                Camera c = (!cam) ? Camera.current ?? Camera.main : cam;
-                reader.SetCamera(c);
+                List<Point> loadedPoints = new();
                 
-                // Create new point buffer
-                List<Point> loadedPoints = reader.GetLoadedPoints();         
-                
-                if (loadedPoints.Count == 0)
-                    return;
+                if (useNodesToShow) {   // If nodes to show enabled, render all and only nodes in list
+                    reader.SetNodesToShow(nodesToShow);
+                    loadedPoints = reader.GetLoadedPoints();
+                } else {
+                    reader.SetNodesToShow(null);
+                    Camera c = (!cam) ? Camera.current ?? Camera.main : cam;
+                    reader.SetCamera(c);
+                    
+                    // Create new point buffer
+                    loadedPoints = reader.GetLoadedPoints();   
+                    if (debugReader) {
+                        reader.SetDebug();
+                        debugReader = false;
+                    }      
+
+                    if (maxOctreeRenderDepth != reader.traversalDepth)
+                        reader.SetTraversalDepth(maxOctreeRenderDepth);
+
+                    if (pointBudget != reader.pointBudget)
+                        reader.SetPointBudget(pointBudget);
+                    
+                    if (loadedPoints.Count == 0)
+                        return;
+                }
+
+                Debug.Log($"Rendering {loadedPoints.Count} points");
 
                 ComputeBuffer cb = new ComputeBuffer(loadedPoints.Count, Point.size);
                 cb.SetData(loadedPoints);

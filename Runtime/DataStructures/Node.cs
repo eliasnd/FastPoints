@@ -26,7 +26,7 @@ namespace FastPoints {
             }
         }
 
-        public bool IsVisible;
+        public bool AwaitingLoad;
     }
 
     public class NodeReference
