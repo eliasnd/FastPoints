@@ -25,6 +25,7 @@ namespace FastPoints {
         public int treeLevels = 5;
         public Camera cam = null;
         public bool debugReader = false;
+        public bool runOnce = false;
         public string highlightedNode="";
         public int maxOctreeRenderDepth = -1;
         public int pointBudget = 1000000;
@@ -52,15 +53,17 @@ namespace FastPoints {
         bool readerRunning = false;
         bool awaitingDecimated = false;
 
+        bool firstFrame;
+
         public void Awake() {
             dispatcher = new Dispatcher();
             mat = new Material(Shader.Find("Custom/DefaultPoint"));
-            computeShader = (ComputeShader)Resources.Load("CountAndSort");
+            computeShader = (ComputeShader)Resources.Load("FilterPoints");
         }
 
         public void Reset() {
             dispatcher = new Dispatcher();
-            computeShader = (ComputeShader)Resources.Load("CountAndSort");
+            computeShader = (ComputeShader)Resources.Load("FilterPoints");
             oldHandle = null;
         
             if (treeThread != null) {
@@ -138,10 +141,11 @@ namespace FastPoints {
                 Debug.Log("init reader");
                 if (!tree.Loaded) {
                     tree.LoadTree();
-                    tree.VerifyTree();
+                    firstFrame = true;
+                    // tree.VerifyTree();
                 }
 
-                int pointBudget = 10000000;
+                // int pointBudget = 10000000;
                 pointBuffer = new ComputeBuffer(pointBudget, Point.size);
                 Material mat = new Material(Shader.Find("Custom/DefaultPoint"));
                 mat.hideFlags = HideFlags.DontSave;
@@ -210,13 +214,13 @@ namespace FastPoints {
 
             if (data.TreeGenerated) {
                 List<Point> loadedPoints = new();
+                Camera c = (!cam) ? Camera.current ?? Camera.main : cam;
                 
                 if (useNodesToShow) {   // If nodes to show enabled, render all and only nodes in list
                     reader.SetNodesToShow(nodesToShow);
                     loadedPoints = reader.GetLoadedPoints();
                 } else {
                     reader.SetNodesToShow(null);
-                    Camera c = (!cam) ? Camera.current ?? Camera.main : cam;
                     reader.SetCamera(c);
                     
                     // Create new point buffer
@@ -238,18 +242,82 @@ namespace FastPoints {
 
                 Debug.Log($"Rendering {loadedPoints.Count} points");
 
-                ComputeBuffer cb = new ComputeBuffer(loadedPoints.Count, Point.size);
-                cb.SetData(loadedPoints);
+                Matrix4x4 mvp = GL.GetGPUProjectionMatrix(c.projectionMatrix, true) * c.worldToCameraMatrix * transform.localToWorldMatrix;
 
+                // if (runOnce) {
+                //     try {
+                //         List<Point> clipPoints = loadedPoints.FindAll(p => {
+                //             Vector4 clipPos = mvp * new Vector4(p.pos.x, p.pos.y, p.pos.z, 1);
+                //             Vector3 ndc = new Vector3(clipPos.x / clipPos.w, clipPos.y / clipPos.w, clipPos.z / clipPos.w);
+                //             return !(ndc.x <= -1 || ndc.x >= 1 || ndc.y <= -1 || ndc.y >= 1 || ndc.z <= 0 || ndc.z > 1);
+                //         }).ToList();
+                //         runOnce = false;
+                //     } catch (Exception e) {
+                //         Debug.LogError($"Error {e.Message}");
+                //     }
+                // }
+
+                ComputeBuffer pointBuffer = new ComputeBuffer(loadedPoints.Count, Point.size);
+                pointBuffer.SetData(loadedPoints);
+
+                ComputeBuffer lockBuffer = new ComputeBuffer(Screen.width * Screen.height, sizeof(int));
+                int[] lockArr = new int[Screen.width * Screen.height];
+                lockBuffer.SetData(lockArr);
+
+                ComputeBuffer colorBuffer = new ComputeBuffer(Screen.width * Screen.height, sizeof(Int16) * 4);
+                ComputeBuffer posBuffer = new ComputeBuffer(Screen.width * Screen.height, sizeof(float) * 4);
+
+                // int threadBudget = Mathf.CeilToInt(loadedPoints.Count / 65536f);    // 256 * 256 threads
+                int threadBudget = Mathf.CeilToInt(loadedPoints.Count / 65535f);    // Debug
+
+                int debugCount = 6;
+                int[] debugArr = new int[debugCount];
+                ComputeBuffer debugBuffer = new ComputeBuffer(debugCount, sizeof(int));
+                debugBuffer.SetData(debugArr);
+
+                int kernel = computeShader.FindKernel("FilterPoints");
+                computeShader.SetInt("_ThreadBudget", threadBudget);
+                computeShader.SetInt("_PointCount", loadedPoints.Count);
+                computeShader.SetMatrix("_Transform", transform.localToWorldMatrix);
+                computeShader.SetMatrix("_MVP", mvp);
+                computeShader.SetInt("_ScreenWidth", Screen.width);
+                computeShader.SetInt("_ScreenHeight", Screen.height);
+                computeShader.SetBuffer(kernel, "_Points", pointBuffer);
+                computeShader.SetBuffer(kernel, "_Locks", lockBuffer);
+                computeShader.SetBuffer(kernel, "_OutCol", colorBuffer);
+                computeShader.SetBuffer(kernel, "_OutPos", posBuffer);
+                computeShader.SetBuffer(kernel, "_DebugBuffer", debugBuffer);
+                
+                // if (runOnce) {
+                    Stopwatch watch = new Stopwatch();
+                    watch.Start();
+                    // computeShader.Dispatch(kernel, 256, 1, 1);
+                    computeShader.Dispatch(kernel, 65535, 1, 1);
+                    watch.Stop();
+                    Debug.Log($"Compute shader took {watch.ElapsedMilliseconds} ms");
+                    runOnce = false;
+                    debugBuffer.GetData(debugArr);
+                    Vector4[] debugPosArr = new Vector4[Screen.width * Screen.height];
+                    posBuffer.GetData(debugPosArr);
+                // }
+                
+                mat = new Material(Shader.Find("Custom/FilteredPoints"));
                 mat.hideFlags = HideFlags.DontSave;
-                mat.SetBuffer("_PointBuffer", cb);
+                // mat.SetBuffer("_PointBuffer", pointBuffer);
+                mat.SetInt("_ScreenWidth", Screen.width);
+                mat.SetBuffer("_Colors", colorBuffer);
+                mat.SetBuffer("_Positions", posBuffer);
                 mat.SetFloat("_PointSize", pointSize);
                 mat.SetMatrix("_Transform", transform.localToWorldMatrix);
                 mat.SetPass(0);
 
-                Graphics.DrawProceduralNow(MeshTopology.Points, loadedPoints.Count, 1);
+                Graphics.DrawProceduralNow(MeshTopology.Points, Screen.width * Screen.height, 1);
 
-                cb.Dispose();
+                pointBuffer.Dispose();
+                lockBuffer.Dispose();
+                colorBuffer.Dispose();
+                posBuffer.Dispose();
+
             } else if (data.DecimatedGenerated) {
                 // Debug.Log($"Point size: {System.Runtime.InteropServices.Marshal.SizeOf<Vector3>()} + {System.Runtime.InteropServices.Marshal.SizeOf<Color>()}");
                 ComputeBuffer cb = new ComputeBuffer(data.decimatedCloud.Length, Point.size);
