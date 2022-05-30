@@ -32,6 +32,7 @@ namespace FastPoints {
         public bool showBBoxs = true;
         public bool useNodesToShow = false;
         public string[] nodesToShow;
+        public bool useComputeShader = false;
         #endregion
 
         int actionsPerFrame = 2;
@@ -152,21 +153,9 @@ namespace FastPoints {
                 mat.SetBuffer("_PointBuffer", pointBuffer);
                 mat.SetFloat("_PointSize", pointSize);
 
-                // readThread = new Thread(new ParameterizedThreadStart(ReadTreeThread));
-                // readThread.Start(new ReadTreeParams(tree, cam.projectionMatrix * cam.worldToCameraMatrix, pointBuffer, dispatcher, () => {}));
                 Camera c = (!cam) ? Camera.current ?? Camera.main : cam;
                 reader = new(tree, this, c);
                 readerRunning = true;
-            }
-
-            for (int i = 0; i < actionsPerFrame; i++) {
-                // if (data.TreeGenerated && readerRunning)
-                //     reader.SetNodesToShow(toShow);
-                // if (dispatcher.Count > 0) {
-                //     Action action;
-                //     dispatcher.TryDequeue(out action);
-                //     action();
-                // }
             }
 
             // if (!treeThread.IsAlive)
@@ -214,7 +203,16 @@ namespace FastPoints {
 
             if (data.TreeGenerated) {
                 List<Point> loadedPoints = new();
-                Camera c = (!cam) ? Camera.current ?? Camera.main : cam;
+                Camera c = (!cam || useComputeShader) ? Camera.current ?? Camera.main : cam;
+                Debug.Log($"Camera {c.name}, gameObject {c.gameObject}");
+                if (useComputeShader) {
+                    if (!c.gameObject.GetComponent<PointCloudCamera>()) {
+                        c.gameObject.AddComponent<PointCloudCamera>();
+                        // c.gameObject.GetComponent<PointCloudCamera>().Init();
+                    }
+                } else if (c.gameObject.GetComponent<PointCloudCamera>()) {
+                    UnityEngine.Object.DestroyImmediate(c.gameObject.GetComponent<PointCloudCamera>());
+                }
                 
                 if (useNodesToShow) {   // If nodes to show enabled, render all and only nodes in list
                     reader.SetNodesToShow(nodesToShow);
@@ -241,82 +239,22 @@ namespace FastPoints {
                 }
 
                 Debug.Log($"Rendering {loadedPoints.Count} points");
+                if (useComputeShader)
+                    c.GetComponent<PointCloudCamera>().AddCloud(transform, loadedPoints);
+                else {
+                    ComputeBuffer cb = new ComputeBuffer(loadedPoints.Count, Point.size);
+                    cb.SetData(loadedPoints);
 
-                Matrix4x4 mvp = GL.GetGPUProjectionMatrix(c.projectionMatrix, true) * c.worldToCameraMatrix * transform.localToWorldMatrix;
+                    mat.hideFlags = HideFlags.DontSave;
+                    mat.SetBuffer("_PointBuffer", cb);
+                    mat.SetFloat("_PointSize", pointSize);
+                    mat.SetMatrix("_Transform", transform.localToWorldMatrix);
+                    mat.SetPass(0);
 
-                // if (runOnce) {
-                //     try {
-                //         List<Point> clipPoints = loadedPoints.FindAll(p => {
-                //             Vector4 clipPos = mvp * new Vector4(p.pos.x, p.pos.y, p.pos.z, 1);
-                //             Vector3 ndc = new Vector3(clipPos.x / clipPos.w, clipPos.y / clipPos.w, clipPos.z / clipPos.w);
-                //             return !(ndc.x <= -1 || ndc.x >= 1 || ndc.y <= -1 || ndc.y >= 1 || ndc.z <= 0 || ndc.z > 1);
-                //         }).ToList();
-                //         runOnce = false;
-                //     } catch (Exception e) {
-                //         Debug.LogError($"Error {e.Message}");
-                //     }
-                // }
+                    Graphics.DrawProceduralNow(MeshTopology.Points, loadedPoints.Count, 1);
 
-                ComputeBuffer pointBuffer = new ComputeBuffer(loadedPoints.Count, Point.size);
-                pointBuffer.SetData(loadedPoints);
-
-                ComputeBuffer lockBuffer = new ComputeBuffer(Screen.width * Screen.height, sizeof(int));
-                int[] lockArr = new int[Screen.width * Screen.height];
-                lockBuffer.SetData(lockArr);
-
-                ComputeBuffer colorBuffer = new ComputeBuffer(Screen.width * Screen.height, sizeof(Int16) * 4);
-                ComputeBuffer posBuffer = new ComputeBuffer(Screen.width * Screen.height, sizeof(float) * 4);
-
-                // int threadBudget = Mathf.CeilToInt(loadedPoints.Count / 65536f);    // 256 * 256 threads
-                int threadBudget = Mathf.CeilToInt(loadedPoints.Count / 65535f);    // Debug
-
-                int debugCount = 6;
-                int[] debugArr = new int[debugCount];
-                ComputeBuffer debugBuffer = new ComputeBuffer(debugCount, sizeof(int));
-                debugBuffer.SetData(debugArr);
-
-                int kernel = computeShader.FindKernel("FilterPoints");
-                computeShader.SetInt("_ThreadBudget", threadBudget);
-                computeShader.SetInt("_PointCount", loadedPoints.Count);
-                computeShader.SetMatrix("_Transform", transform.localToWorldMatrix);
-                computeShader.SetMatrix("_MVP", mvp);
-                computeShader.SetInt("_ScreenWidth", Screen.width);
-                computeShader.SetInt("_ScreenHeight", Screen.height);
-                computeShader.SetBuffer(kernel, "_Points", pointBuffer);
-                computeShader.SetBuffer(kernel, "_Locks", lockBuffer);
-                computeShader.SetBuffer(kernel, "_OutCol", colorBuffer);
-                computeShader.SetBuffer(kernel, "_OutPos", posBuffer);
-                computeShader.SetBuffer(kernel, "_DebugBuffer", debugBuffer);
-                
-                // if (runOnce) {
-                    Stopwatch watch = new Stopwatch();
-                    watch.Start();
-                    // computeShader.Dispatch(kernel, 256, 1, 1);
-                    computeShader.Dispatch(kernel, 65535, 1, 1);
-                    watch.Stop();
-                    Debug.Log($"Compute shader took {watch.ElapsedMilliseconds} ms");
-                    runOnce = false;
-                    debugBuffer.GetData(debugArr);
-                    Vector4[] debugPosArr = new Vector4[Screen.width * Screen.height];
-                    posBuffer.GetData(debugPosArr);
-                // }
-                
-                mat = new Material(Shader.Find("Custom/FilteredPoints"));
-                mat.hideFlags = HideFlags.DontSave;
-                // mat.SetBuffer("_PointBuffer", pointBuffer);
-                mat.SetInt("_ScreenWidth", Screen.width);
-                mat.SetBuffer("_Colors", colorBuffer);
-                mat.SetBuffer("_Positions", posBuffer);
-                mat.SetFloat("_PointSize", pointSize);
-                mat.SetMatrix("_Transform", transform.localToWorldMatrix);
-                mat.SetPass(0);
-
-                Graphics.DrawProceduralNow(MeshTopology.Points, Screen.width * Screen.height, 1);
-
-                pointBuffer.Dispose();
-                lockBuffer.Dispose();
-                colorBuffer.Dispose();
-                posBuffer.Dispose();
+                    cb.Dispose();
+                }
 
             } else if (data.DecimatedGenerated) {
                 // Debug.Log($"Point size: {System.Runtime.InteropServices.Marshal.SizeOf<Vector3>()} + {System.Runtime.InteropServices.Marshal.SizeOf<Color>()}");
