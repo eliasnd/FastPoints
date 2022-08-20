@@ -120,6 +120,7 @@ namespace FastPoints {
                 if (!data.Init)
                     data.Initialize();
                 if (!data.DecimatedGenerated && !awaitingDecimated) {
+                    Camera.main.GetComponent<PathCamera>().resetFPSCount = true;
                     data.PopulateSparseCloud(decimatedCloudSize).ContinueWith((Task t) => { awaitingDecimated = false; });
                     awaitingDecimated = true;
                 }
@@ -140,20 +141,15 @@ namespace FastPoints {
 
             if (data.TreeGenerated && !readerRunning) {
                 Debug.Log("init reader");
+                // Camera.main.GetComponent<PathCamera>().LogFPS("fps.csv");
                 if (!tree.Loaded) {
                     tree.LoadTree();
                     firstFrame = true;
                     // tree.VerifyTree();
                 }
 
-                // int pointBudget = 10000000;
-                pointBuffer = new ComputeBuffer(pointBudget, Point.size);
-                Material mat = new Material(Shader.Find("Custom/DefaultPoint"));
-                mat.hideFlags = HideFlags.DontSave;
-                mat.SetBuffer("_PointBuffer", pointBuffer);
-                mat.SetFloat("_PointSize", pointSize);
-
                 Camera c = (!cam) ? Camera.current ?? Camera.main : cam;
+                // Camera c = Camera.current;
                 reader = new(tree, this, c);
                 readerRunning = true;
             }
@@ -239,9 +235,13 @@ namespace FastPoints {
                 }
 
                 Debug.Log($"Rendering {loadedPoints.Count} points");
-                if (useComputeShader)
+                if (useComputeShader) {
                     c.GetComponent<PointCloudCamera>().AddCloud(transform, loadedPoints);
-                else {
+                    if (runOnce) {
+                        c.GetComponent<PointCloudCamera>().runOnce = true;
+                        runOnce = false;
+                    }
+                } else {
                     ComputeBuffer cb = new ComputeBuffer(loadedPoints.Count, Point.size);
                     cb.SetData(loadedPoints);
 
@@ -275,7 +275,7 @@ namespace FastPoints {
 
         static void BuildTreeThread(object obj) {
             BuildTreeParams p = (BuildTreeParams)obj;
-            _ = p.tree.BuildTree(p.data, 3, p.dispatcher, p.cb);
+            _ = p.tree.BuildTree(p.data, 5, p.dispatcher, p.cb);
         }
 
         struct BuildTreeParams {

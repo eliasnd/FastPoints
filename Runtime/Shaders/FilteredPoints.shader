@@ -20,7 +20,7 @@ Shader "Custom/FilteredPoints" {
             sampler2D _MainTex;
             sampler2D _CameraDepthTexture;
             sampler2D _CloudTex;
-            Texture2D<float> _CloudDepthTexture;
+            sampler2D _CloudDepthTexture;
 
             struct appdata {
                 float4 vertex : POSITION;
@@ -41,12 +41,12 @@ Shader "Custom/FilteredPoints" {
 
             fixed4 frag(v2f i) : SV_Target {
                 float sceneDepth = Linear01Depth(tex2D(_CameraDepthTexture, i.uv).r) * _ProjectionParams.z;
-                float cloudDepth = _CloudDepthTexture[i.uv];
-                return sampler2D(_CloudTex).r;
-                // if (sceneDepth < cloudDepth)
-                //     return tex2D(_MainTex, i.uv);
-                // else
-                //     return _CloudTex[i.uv];
+                float cloudDepth = Linear01Depth(tex2D(_CloudDepthTexture, i.uv).r) * _ProjectionParams.z;
+                // return tex2D(_CloudTex, i.uv).r;
+                if (tex2D(_CloudDepthTexture, i.uv).r == 0 || sceneDepth < cloudDepth)
+                    return tex2D(_MainTex, i.uv);
+                else
+                    return tex2D(_CloudTex, i.uv);
             }
 
             ENDCG

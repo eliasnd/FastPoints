@@ -224,6 +224,20 @@ namespace FastPoints {
                 return curr;
             }
 
+            // string[] chunkPaths = Directory.GetFiles($"{p.tree.dirPath}/chunks");
+            // List<Node> startNodes = new();
+            // for (int cp = 0; cp < chunkPaths.Length; cp++)
+            // {
+            //     string chunkID = Path.GetFileNameWithoutExtension(chunkPaths[cp])[1..];
+            //     Node curr = p.tree.root;
+            //     for (int i = 0; i < chunkID.Length-1; i++)
+            //         curr = curr.children[chunkID[i] - '0'];
+
+            //     curr = curr.children[chunkID[chunkID.Length-1] - '0'];
+            //     if (curr != null)
+            //         startNodes.Add(curr);
+            // }
+
             while (!p.stopSignal) {
                 List<Point> visibleTmp = new();
                 List<(string, AABB)> bboxTmp = new();
@@ -254,12 +268,16 @@ namespace FastPoints {
 
                     SimplePriorityQueue<Node> bfsQueue = new();
                     bfsQueue.Enqueue(p.tree.root, 0);
+                    // foreach (Node node in startNodes) {
+                    //     bfsQueue.Enqueue(node, 0);
+                    // }
+
                     traversalCount = 0;
                     int c = 0;
                     bool debugAtStart = p.debug;
                     while (bfsQueue.Count > 0) {
                         c++;
-                        Node n = bfsQueue.Dequeue();                   
+                        Node n = bfsQueue.Dequeue();                
                         TraverseNode(n, bfsQueue, visibleTmp, bboxTmp, debugAtStart);
                     }  
 

@@ -52,7 +52,8 @@ namespace FastPoints {
             return result;
         }
 
-        public static void Sample(Node node, Action<Node> cb) {
+        public static void Sample(Node node, Action<Node> cb, string traceback = "") {
+            traceback += $"\nSample call on node {node.name}";
             // if (node != null && node.points != null) {
             //     foreach (Point pt in node.points)
             //         if (Vector3.Min(pt.pos, node.bbox.Min) != node.bbox.Min || Vector3.Max(pt.pos, node.bbox.Max) != node.bbox.Max)
@@ -62,25 +63,23 @@ namespace FastPoints {
                 
 
             void traverse(Node node, Action<Node> cb) {
+                traceback += $"\nTraversing {node.name}";
                 foreach (Node child in node.children)
                     if (child != null && !child.subsampled)
                         traverse(child, cb);
-                // Debug.Log("Subsampling done");
                 cb(node);
             }
 
             traverse(node, (Node node) => {
                 try {
-                if (node.name == "n37" || node.name == "n3")
-                    Debug.Log("n37");
-                    
                 node.subsampled = true;
 
                 uint pointCount = node.pointCount;
 
                 int gridSize = 128;
-                int[] grid = new int[gridSize * gridSize * gridSize];
-                for (int i = 0; i < grid.Length; i++)
+                // int[] grid = new int[gridSize * gridSize * gridSize];
+                int[] grid = ArrayPool<int>.Shared.Rent(gridSize * gridSize * gridSize);
+                for (int i = 0; i < gridSize * gridSize * gridSize; i++)
                     grid[i] = -1;
 
                 int iteration = 0;
@@ -117,22 +116,17 @@ namespace FastPoints {
                     Random rnd = new Random();
                     indices = indices.OrderBy(i => rnd.Next()).ToArray();
 
-                    // Point[] pointBuffer = new Point[node.pointCount];
                     Point[] pointBuffer = ArrayPool<Point>.Shared.Rent((int)node.pointCount);
                     for (int i = 0; i < node.pointCount; i++)
-                        try { 
-                            pointBuffer[i] = node.points[indices[i]];
-                        } catch (Exception e)
-                        {
-                            Debug.Log(e.Message);
-                        }
+                        pointBuffer[i] = node.points[indices[i]];
+
 
                     for (int i = 0; i < node.pointCount; i++)
                         node.points[i] = pointBuffer[i];
 
                     for (int i = 0; i < node.pointCount; i++)
                         if (!node.bbox.InAABB(node.points[i].pos))
-                            Debug.LogError($"LeafIssue at node {node.name}");
+                            Debug.LogError($"LeafIssue at node {node.name}. Traceback: {traceback}");
 
                     ArrayPool<Point>.Shared.Return(pointBuffer);
                 }
@@ -154,7 +148,8 @@ namespace FastPoints {
 
                         // CheckBBox(child.points, node.bbox);
 
-                        bool[] acceptedFlags = new bool[(int)child.pointCount];
+                        // bool[] acceptedFlags = new bool[(int)child.pointCount];
+                        bool[] acceptedFlags = ArrayPool<bool>.Shared.Rent((int)child.pointCount);
                         int rejectedCount = 0;
 
                         for (int i = 0; i < child.pointCount; i++) {
@@ -184,6 +179,8 @@ namespace FastPoints {
                         rejectedCounts.Add(rejectedCount);
                     }
 
+                    ArrayPool<int>.Shared.Return(grid);
+
                     Point[] accepted = ArrayPool<Point>.Shared.Rent(acceptedCount);
                     int acceptedIdx = 0;
                     for (int c = 0; c < 8; c++)
@@ -211,6 +208,8 @@ namespace FastPoints {
                                 rejectedIdx++;
                             }
                         }
+
+                        ArrayPool<bool>.Shared.Return(acceptedFlags);
 
                         // ArrayPool<Point>.Shared.Return(child.points);
 

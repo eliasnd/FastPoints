@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 using System.Collections.Generic;
 using System.Collections.Concurrent;
 using System.Linq;
+using System.Buffers;
 
 using Debug = UnityEngine.Debug;
 
@@ -203,8 +204,8 @@ namespace FastPoints {
 
                 this.bbox = new AABB(data.MinPoint, data.MaxPoint);
 
-                // chunkTask = Chunker.MakeChunks(data, dirPath, dispatcher);
-                // await chunkTask;
+                chunkTask = Chunker.MakeChunks(data, dirPath, dispatcher);
+                await chunkTask;
 
                 Debug.Log($"{name}: Chunking done");
 
@@ -294,6 +295,7 @@ namespace FastPoints {
 
                     Sampling.Sample(root, (Node node) => {
                         node.offset = (uint)qw.Enqueue(Point.ToBytes(node.points, 0, (int)node.pointCount));
+                        ArrayPool<Point>.Shared.Return(node.points);
                         node.points = null;
                     });
 
@@ -386,7 +388,6 @@ namespace FastPoints {
                     Debug.Log($"{name}: Stitching done");
                     cb();
                     Debug.Log($"{name}: All done");
-                    AssetDatabase.ForceReserializeAssets();
                 } catch (Exception e)
                 {
                     Debug.Log($"Exception. Message: {e.Message}, Backtrace: {e.StackTrace}, Inner: {e.InnerException}");

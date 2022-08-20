@@ -17,7 +17,7 @@ namespace FastPoints {
         bool debug = false;
 
         static int treeDepth = 3;
-        static int maxNodeSize = 100000;
+        static int maxNodeSize = 50000;
         static int subsampleSize = 50000;
 
         int octreeDepth = 0;
@@ -119,11 +119,13 @@ namespace FastPoints {
             // Debug.Log("Exit");
         }
 
-        public void IndexPoints(Node root, Point[] points, int pointCount) {
+        public void IndexPoints(Node root, Point[] points, int pointCount, string traceback = "") {
+            traceback += $"\nIndexing root {root.name}";
             if (debug)
                 Debug.Log("I1");
             try {
                 CheckBBox(points, root.bbox, pointCount);
+                traceback += "\nBBox check passed";
             } catch (Exception e) {
                 Debug.LogError($"Currently at root name {root.name}, error {e.Message}");
             }
@@ -132,12 +134,12 @@ namespace FastPoints {
             int gridSize = (int)Mathf.Pow(2, treeDepth-1);
             int gridTotal = gridSize * gridSize * gridSize;
 
-            int[] mortonIndices = new int[gridSize * gridSize * gridSize];
+            // int[] mortonIndices = new int[gridSize * gridSize * gridSize];
 
-            for (int x = 0; x < gridSize; x++)
-            for (int y = 0; y < gridSize; y++)
-            for (int z = 0; z < gridSize; z++)
-                mortonIndices[x * gridSize * gridSize + y * gridSize + z] = Utils.MortonEncode(z, y, x);
+            // for (int x = 0; x < gridSize; x++)
+            // for (int y = 0; y < gridSize; y++)
+            // for (int z = 0; z < gridSize; z++)
+            //     mortonIndices[x * gridSize * gridSize + y * gridSize + z] = Utils.MortonEncode(z, y, x);
 
             int GetNode(Point p) {
                 float threshold = 1f / gridSize; // Used to calculate which index for each dimension
@@ -145,7 +147,7 @@ namespace FastPoints {
                 int x = Mathf.Min(Mathf.FloorToInt(Mathf.InverseLerp(root.bbox.Min.x, root.bbox.Max.x, p.pos.x) / threshold), gridSize-1);
                 int y = Mathf.Min(Mathf.FloorToInt(Mathf.InverseLerp(root.bbox.Min.y, root.bbox.Max.y, p.pos.y) / threshold), gridSize-1);
                 int z = Mathf.Min(Mathf.FloorToInt(Mathf.InverseLerp(root.bbox.Min.z, root.bbox.Max.z, p.pos.z) / threshold), gridSize-1);
-                return mortonIndices[x * gridSize * gridSize + y * gridSize + z];
+                return Utils.MortonEncode(z, y, x);
             }
 
             int[] nodeCounts = intPool.Rent(gridTotal); // RENT_1
@@ -171,30 +173,25 @@ namespace FastPoints {
             if (nodeOffsets[gridTotal-1] + nodeCounts[gridTotal-1] != pointCount)
                 Debug.Log("Offset issue!");
 
-            int[] debugNodeOffsets = (int[])nodeOffsets.Clone();
+            // int[] debugNodeOffsets = (int[])nodeOffsets.Clone();
 
             Point[] sortedPoints = pointPool.Rent(pointCount);  // RENT_3
+            // Point[] sortedPoints = new Point[pointCount];
             for (int i = 0; i < pointCount; i++) {
                 int node = GetNode(points[i]);
+                // if (node == 59)
+                //     node = 59;
                 int offset = nodeOffsets[node]++;
-                if (nodeOffsets[node] > pointCount)
-                    Debug.Log("Here");
-                if (offset > pointCount)
-                    Debug.Log("Here");
-                try {
-                    sortedPoints[offset] = points[i];
-                } catch (Exception e) {
-                    Debug.Log("Here");
-                }
-                
+                sortedPoints[offset] = points[i];
             }
 
-            points = sortedPoints;
-            pointPool.Return(sortedPoints); // RETURN_3
+            int n = 0;
+
+            // points = sortedPoints;
+            // pointPool.Return(sortedPoints); // RETURN_3
 
             if (debug)
                 Debug.Log("I2");
-
 
             // MAKE SUM PYRAMID
 
@@ -236,6 +233,17 @@ namespace FastPoints {
 
                 levelDim /= 2;
             }
+
+            // DEBUG: Create bbox pyramid
+
+            // AABB[][] bboxPyramid = new AABB[treeDepth][];
+            // for (int l = 0; l < treeDepth; l++)
+            //     bboxPyramid[l] = root.bbox.Subdivide((int)Mathf.Pow(2,l));
+
+            // for (int i = 0; i < gridTotal; i++)
+            //     for (int p = 0; p < sumPyramid[treeDepth-1][i].Length; p++)
+            //         if (!bboxPyramid[treeDepth-1][i].InAABB(sumPyramid[treeDepth-1][i][p]))
+            //             Debug.LogError($"Check 1 bounding box issue at node {node.name}. Traceback: {traceback}");
 
             if (debug)
                 Debug.Log("I3");
@@ -336,28 +344,88 @@ namespace FastPoints {
 
             List<Node> recursiveCalls = new();  // Parallelize with tasks eventually?
 
+            // n = 0;
+            // for (int j = 0; j < gridTotal; j++)
+            //     for (int k = 0; k < nodeCounts[j]; k++) {
+            //         if (GetNode(sortedPoints[n]) != j)
+            //             Debug.LogError($"Issue0 in sorted points at {n}, expected {j}, got {GetNode(sortedPoints[n])}");
+            //         n++;
+            //     }
+
+            // Point[] oldSortedPoints = new Point[sortedPoints.Length];
+            // for (int i = 0; i < pointCount; i++)
+            //     oldSortedPoints[i] = sortedPoints[i].DeepClone();
+            
+            // int nrc = 0;
+
             foreach (NodeReference nr in nodeRefs)
             {
+                // for (int i = 0; i < pointCount; i++)
+                //     if (!oldSortedPoints[i].Equals(sortedPoints[i]))
+                //         throw new Exception("Unequal1");
+                // nrc++;
                 Node node = ExpandReference(nr);
                 node.pointCount = nr.pointCount;
 
+                // for (int i = 0; i < pointCount; i++)
+                //     if (!oldSortedPoints[i].Equals(sortedPoints[i]))
+                //         throw new Exception("Unequal2");
+
                 node.points = pointPool.Rent((int)node.pointCount); // RENT_6
                 int nodeOffset = offsetPyramid[nr.level][Utils.MortonEncode(nr.z, nr.y, nr.x)];
-                for (int i = 0; i < node.pointCount; i++)
+                for (int i = 0; i < node.pointCount; i++) {
                     node.points[i] = sortedPoints[nodeOffset+i];
+                }
+
+                // for (int i = 0; i < pointCount; i++)
+                //     if (!oldSortedPoints[i].Equals(sortedPoints[i]))
+                //         throw new Exception("Unequal3");
+
+                n = 0;
+                // for (int j = 0; j < gridTotal; j++)
+                //     for (int k = 0; k < nodeCounts[j]; k++) {
+                //         if (GetNode(sortedPoints[n]) != j)
+                //             Debug.LogError($"Issue1 in sorted points at {n}, expected {j}, got {GetNode(sortedPoints[n])}");
+                //         n++;
+                //     }
+
+                for (int i = 0; i < node.pointCount; i++)
+                    if (!node.bbox.InAABB(node.points[i].pos)) {
+                        int idx = Utils.MortonEncode(nr.z, nr.y, nr.x);
+                        int target = GetNode(node.points[i]);
+                        Debug.LogError($"Bounding box issue at node {node.name}, level {nr.level}, idx {idx} with bbox {node.bbox.ToString()} and point ({node.points[i].pos.x}, {node.points[i].pos.y}, {node.points[i].pos.z}), originally sorted into node {target},\nTraceback: {traceback}");
+                        // VERIFY SORTING
+                        // if (idx != target)
+                        //     Debug.LogError($"Sorting issue at point {nodeOffset+i}, expected {idx}, actually {target}");
+                        // n = 0;
+                        // for (int j = 0; j < gridTotal; j++)
+                        //     for (int k = 0; k < nodeCounts[j]; k++) {
+                        //         if (GetNode(sortedPoints[n]) != j)
+                        //             Debug.LogError($"Issue2 in sorted points at {n}, expected {j}, got {GetNode(sortedPoints[n])}");
+                        //         n++;
+                        //     }
+                        // Debug.LogError($"Final n value is {n}");
+                    }
 
                 if (node.pointCount > maxNodeSize) {
-                    if (node.name == "n33")
-                        Debug.Log("n33");
+                    // if (node.name == "n33")
+                    //     Debug.Log("n33");
                     recursiveCalls.Add(node);
                 }
 
                 // if (node.name == "n377")
                 //     Debug.Log("Here");
+                // for (int i = 0; i < pointCount; i++)
+                //     if (!oldSortedPoints[i].Equals(sortedPoints[i]))
+                //         throw new Exception("Unequal4");
             }
 
-            // foreach (Node node in recursiveCalls)
-            //     IndexPoints(node, node.points, (int)node.pointCount);
+            pointPool.Return(sortedPoints); // RETURN_3
+
+            foreach (Node node in recursiveCalls) {
+                traceback += $"\nNode {node.name} needs expansion";
+                IndexPoints(node, node.points, (int)node.pointCount, string.Copy(traceback));
+            }
 
 
             if (debug)
@@ -369,7 +437,7 @@ namespace FastPoints {
                 node.offset = (uint)qw.Enqueue(Point.ToBytes(node.points, 0, (int)node.pointCount));
                 pointPool.Return(node.points);  // RETURN_6
                 node.points = null;
-            });  
+            }, string.Copy(traceback));  
 
 
             intPool.Return(nodeCounts); // RETURN_1

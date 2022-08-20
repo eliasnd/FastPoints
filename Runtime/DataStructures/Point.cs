@@ -133,6 +133,11 @@ namespace FastPoints {
             return pos.Equals(other.pos) && col.Equals(other.col);
         }
 
-        
+        public Point DeepClone() {
+            return new Point(
+                new Vector3(pos.x, pos.y, pos.z),
+                new Color(col.r, col.g, col.b, col.a)
+            );
+        }
     }
 }

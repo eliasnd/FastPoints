@@ -251,11 +251,11 @@ namespace FastPoints {
             Directory.CreateDirectory($"{targetDir}");
             Directory.CreateDirectory($"{targetDir}/chunks");
 
-            Debug.Log("Chunks are:");
+            // Debug.Log("Chunks are:");
             FileStream[] chunkStreams = new FileStream[chunkPaths.Count];
             for (int i = 0; i < chunkPaths.Count; i++) {
                 chunkStreams[i] = File.OpenWrite(chunkPaths[i]);
-                Debug.Log($"Chunk {i} at path {chunkPaths[i]} with bbox {chunkBBox[i].ToString()}");
+                // Debug.Log($"Chunk {i} at path {chunkPaths[i]} with bbox {chunkBBox[i].ToString()}");
             }
 
 
@@ -314,6 +314,10 @@ namespace FastPoints {
 
                 while (chunkWriter.BytesWritten < data.PointCount * 15)
                     Thread.Sleep(500);
+
+                for (int i = 0; i < chunkPaths.Count; i++) {
+                    chunkStreams[i].Close();
+                }
 
                 // r245Points.Sort();
                 // foreach (Point pt in r245Points)
