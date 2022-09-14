@@ -139,7 +139,7 @@ namespace FastPoints {
             return $"AABB( Min: ({Min.x}, {Min.y}, {Min.z}), Max: ({Max.x}, {Max.y}, {Max.z}) )";
         }
 
-        public AABB child(int index) {
+        public AABB ChildAABB(int index) {
             AABB box;
 
             if ((index & 0b100) == 0) {

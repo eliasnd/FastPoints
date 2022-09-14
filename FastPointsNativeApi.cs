@@ -5,29 +5,17 @@ using System.Runtime.InteropServices;
 using UnityEngine;
 using Unity.Collections;
 using Unity.Collections.LowLevel.Unsafe;
-using System.Diagnostics;
-
-using Debug = UnityEngine.Debug;
 
 namespace FastPoints {
-    public class PluginTest : MonoBehaviour
+    public class FastPointsNativeApi
     {    
-        public string source;
-
         //The string dll should match the name of your plugin
         #if UNITY_IOS    
             const string dll = "__Internal";
         #else    
             const string dll = "fastpoints-native";
         #endif    
-        // [DllImport(dll)]    
-        // private static extern void SeedRandomizer();    
-        // [DllImport(dll)]    
-        // private static extern int DieRoll(int sides);    
-        // [DllImport(dll)]    
-        // private static extern float Add(float a, float b);    
-        // [DllImport(dll)]    
-        // private static extern float Random();    
+        
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         public delegate void LoggingCallback(string message);   
 
@@ -47,9 +35,23 @@ namespace FastPoints {
             Debug.Log(message);
         }
 
-        void Start() { 
-            Debug.Log("Start plugin");
-            OctreeLoader.Load(source);
+        public static void PopulateDecimatedCloud(string source, NativeArray<Vector3> points, NativeArray<Color32> colors, int decimatedSize) {
+            unsafe {
+                void* ptr1 = Unity.Collections.LowLevel.Unsafe.NativeArrayUnsafeUtility.GetUnsafePtr(points);
+                void* ptr2 = Unity.Collections.LowLevel.Unsafe.NativeArrayUnsafeUtility.GetUnsafePtr(colors);
+                
+                PopulateDecimatedCloud(
+                    source, 
+                    ptr1,
+                    ptr2,
+                    decimatedSize,
+                    LogMessage
+                );
+            }
+        }
+
+        public static void RunConverter(string source, string outdir) {
+            RunConverter(source, outdir, LogMessage);
         }
     }
 }

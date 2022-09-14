@@ -12,7 +12,7 @@ namespace FastPoints {
         FileType type;
         public FileType Type { get { return type; } }
         [SerializeField]
-        string path;
+        public string path;
         public string Name { get { return Path.GetFileNameWithoutExtension(path); } }
 
         public void Initialize(string path) {
@@ -34,19 +34,6 @@ namespace FastPoints {
         public void Initialize(string path, FileType type) {
             this.path = path;
             this.type = type;
-        }
-
-        public BaseStream GetStream() {
-            switch (type) {
-                case FileType.PLY:
-                    return new PlyStream(path);
-                case FileType.LAS:
-                    return new LasStream(path);
-                case FileType.LAZ:
-                    return new LazStream(path);
-            }
-
-            return null;
         }
     }
 }
