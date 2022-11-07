@@ -18,7 +18,7 @@ namespace FastPoints {
 	}
 
 	public class Hierarchy {
-		public BigInteger firstChunkSize;
+		public int firstChunkSize;
 		public int stepSize;
 		public int depth;
 	}
@@ -102,7 +102,7 @@ namespace FastPoints {
 			return attributes;
 		}
 
-		public static OctreeGeometry Load(string path) {
+		public static OctreeGeometry Load(string path, Dispatcher dispatcher) {
 			Debug.Log("Start load");
 			Metadata metadata = JSONParser.FromJson<Metadata>(System.IO.File.ReadAllText(path));
 			Debug.Log("Got metadata");
@@ -110,7 +110,7 @@ namespace FastPoints {
 			PointAttributes attributes = ParseAttributes(metadata.attributes);
 			Debug.Log($"Got {attributes.attributes.Count} attributes");
 
-			NodeLoader loader = new NodeLoader(path);
+			NodeLoader loader = new NodeLoader(path, dispatcher);
 			loader.metadata = metadata;
 			loader.attributes = attributes;
 			loader.scale = metadata.scale;

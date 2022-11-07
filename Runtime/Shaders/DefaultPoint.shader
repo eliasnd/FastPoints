@@ -19,6 +19,7 @@ Shader "Custom/DefaultPoint" {
 
             float _PointSize;
             float4x4 _Transform;
+            float3 _Offset;
 
             // StructuredBuffer<Point> _PointBuffer;
             StructuredBuffer<float3> _Positions;
@@ -33,7 +34,7 @@ Shader "Custom/DefaultPoint" {
             v2f vert(uint vid : SV_VertexID) {
                 v2f o;
                 // Point p = _PointBuffer[vid];
-                float3 pos = _Positions[vid];
+                float3 pos = _Positions[vid] + _Offset;
                 uint icol = _Colors[vid];
                 half4 col = half4(
                     ((icol      ) & 0xff) / 255.0, 

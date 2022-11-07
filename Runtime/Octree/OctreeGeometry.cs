@@ -11,11 +11,22 @@ namespace FastPoints {
         public float[] scale;
 		public float spacing;
         public AABB boundingBox;
-        public TreeNode root;
+        public OctreeGeometryNode root;
         public PointAttributes pointAttributes;
         public NodeLoader loader;
         public string projection;
         public Vector3 offset;
+        public ComputeBuffer posBuffer;
+        public Vector3[] positions;
+        public ComputeBuffer colBuffer;
+        public Color32[] colors;
+
+        public void Dispose() {
+            if (posBuffer != null) {
+                posBuffer.Release();
+                colBuffer.Release();
+            }
+        }
     }
     
     public class OctreeGeometryNode : TreeNode {
@@ -32,7 +43,7 @@ namespace FastPoints {
         public int level;
         public UInt32 numPoints;
         public int nodeType;
-        public TreeNode[] children;
+        public OctreeGeometryNode[] children;
         public BigInteger hierarchyByteOffset;
         public BigInteger hierarchyByteSize;
         public bool hasChildren;
@@ -51,7 +62,7 @@ namespace FastPoints {
             this.octreeGeometry = octreeGeometry;
             this.boundingBox = boundingBox;
             // this.boundingSphere = boundingBox.getBoundingSphere(new THREE.Sphere());
-            this.children = new TreeNode[8];
+            this.children = new OctreeGeometryNode[8];
             this.numPoints = 0;
             this.level = -1;
         }
@@ -66,29 +77,35 @@ namespace FastPoints {
         //     return children;
         // }
 
-        // public void Load() {
+        public void Load() {
+            try {
+            //if (NodeLoader.numNodesLoading >= NodeLoader.maxNodesLoading) {
+            //    return;
+            //}
 
-        //     if (NodeLoader.numNodesLoading >= NodeLoader.maxNodesLoading) {
-        //         return;
-        //     }
+            octreeGeometry.loader.Load(this);
+            } catch (Exception e)
+            {
+                Debug.LogError($"Got error message: {e.Message}, backtrace: {e.ToString()}");
+            }
+        }
 
-        //     octreeGeometry.loader.Load(this);
-        // }
+        public void Dispose() {
+            if (this.octreeGeometry != null && this.parent != null) {
+                this.octreeGeometry.Dispose();
+                // this.octreeGeometry = null;
+                this.loaded = false;
+                if (PointCloudLoader.debug)
+                    Debug.Log("Unloading node " + name);
 
-        // public void Dispose() {
-        //     if (this.geometry != null && this.parent != null) {
-        //         this.geometry.Dispose();
-        //         this.geometry = null;
-        //         this.loaded = false;
-
-        //         // // this.dispatchEvent( { type: 'dispose' } );
-        //         // for (let i = 0; i < this.oneTimeDisposeHandlers.length; i++) {
-        //         //     let handler = this.oneTimeDisposeHandlers[i];
-        //         //     handler();
-        //         // }
-        //         // this.oneTimeDisposeHandlers = [];
-        //     }
-        // }
+                // // this.dispatchEvent( { type: 'dispose' } );
+                // for (let i = 0; i < this.oneTimeDisposeHandlers.length; i++) {
+                //     let handler = this.oneTimeDisposeHandlers[i];
+                //     handler();
+                // }
+                // this.oneTimeDisposeHandlers = [];
+            }
+        }
 
     }
 }

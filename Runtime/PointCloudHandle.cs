@@ -14,9 +14,11 @@ namespace FastPoints {
         [SerializeField]
         public string path;
         public string Name { get { return Path.GetFileNameWithoutExtension(path); } }
+        public bool Converted;
 
-        public void Initialize(string path) {
+        public void Initialize(string path, bool converted) {
             this.path = path;
+            Converted = converted;
 
             switch (Path.GetExtension(path)) {
                 case ".ply":

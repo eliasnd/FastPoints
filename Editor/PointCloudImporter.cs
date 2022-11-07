@@ -27,8 +27,12 @@ namespace FastPoints {
             // }
 
             // PointCloudData data = ScriptableObject.CreateInstance<PointCloudData>();
+            string expectedPa;
             PointCloudHandle handle = ScriptableObject.CreateInstance<PointCloudHandle>();
-            handle.Initialize(context.assetPath);
+            handle.Initialize(
+                context.assetPath,
+                File.Exists(Directory.GetCurrentDirectory() + "/ConvertedClouds/" + Path.GetFileNameWithoutExtension(context.assetPath) + "/metadata.json")
+            );
             // data.handle = new PointCloudHandle(context.assetPath);
             // AssetDatabase.CreateAsset(data, assetPath);
             context.AddObjectToAsset("handle", handle);

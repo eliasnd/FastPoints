@@ -5,6 +5,8 @@ using System.IO;
 using System.Numerics;
 using System.Threading.Tasks;
 
+using Vector3 = UnityEngine.Vector3;
+
 namespace FastPoints {
 
     public class Node {
@@ -29,9 +31,11 @@ namespace FastPoints {
         public string pathOctree;
 
         public string path = "";
+        Dispatcher dispatcher;
 
-        public NodeLoader(string path){
+        public NodeLoader(string path, Dispatcher dispatcher){
             this.path = path;
+            this.dispatcher = dispatcher;
         }
 
         public async void Load(OctreeGeometryNode node) {
@@ -40,18 +44,19 @@ namespace FastPoints {
                 return;
             }
 
-            Int64 byteSize = node.byteSize;
-            Int64 byteOffset = node.byteOffset;
-
             node.loading = true;
             numNodesLoading++;
 
             if (node.nodeType == 2){
+                try {
                 await LoadHierarchy(node);
+                } catch (Exception e) { Debug.LogError(e.ToString()); }
             }
 
+            Int64 byteSize = node.byteSize;
+            Int64 byteOffset = node.byteOffset;
 
-            pathOctree = $"{path}/../octree.bin";
+            pathOctree = $"{Directory.GetParent(path).ToString()}/octree.bin";
 
             byte[] buffer;
 
@@ -60,10 +65,65 @@ namespace FastPoints {
                 Debug.LogWarning($"loaded node with 0 bytes: {node.name}");
             } else {
                 buffer = new byte[byteSize];
-                FileStream fs = File.Open(pathOctree, FileMode.Open);
+                FileStream fs = File.Open(pathOctree, FileMode.Open, FileAccess.Read, FileShare.Read);
                 fs.Seek(byteOffset, SeekOrigin.Begin);
                 fs.Read(buffer, 0, (int)byteSize);
+                // fs.Close();
             }
+
+            if (node.numPoints == 0) {
+                node.loaded = true;
+                node.loading = false;
+                numNodesLoading--;
+
+                return;
+            }
+
+            await Task.Run(() => {
+                try {
+                Dictionary<string, Tuple<byte[], PointAttribute>> attributeBuffers = Decoder.Decode(new DecoderInput(
+                    buffer, 
+                    attributes,
+                    node.octreeGeometry.scale, 
+                    node.name, 
+                    node.boundingBox.Min + node.octreeGeometry.offset, 
+                    node.boundingBox.Max + node.octreeGeometry.offset,
+                    node.boundingBox.Max - node.boundingBox.Min,
+                    node.octreeGeometry.offset,
+                    (int)node.numPoints
+                ));
+
+                dispatcher.Enqueue(() => {
+                    node.octreeGeometry.posBuffer = new ComputeBuffer((int)node.numPoints, 12);
+                    node.octreeGeometry.posBuffer.SetData(attributeBuffers["position"].Item1);
+                    node.octreeGeometry.colBuffer = new ComputeBuffer((int)node.numPoints, 4);
+                    node.octreeGeometry.colBuffer.SetData(attributeBuffers["rgba"].Item1);
+
+                    node.octreeGeometry.positions = new Vector3[(int)node.numPoints];
+                    node.octreeGeometry.colors = new Color32[(int)node.numPoints];
+                    for (int i = 0; i < node.numPoints; i++) {
+                        node.octreeGeometry.positions[i] = new Vector3(
+                            BitConverter.ToSingle(attributeBuffers["position"].Item1, i * 12),
+                            BitConverter.ToSingle(attributeBuffers["position"].Item1, i * 12 + 4),
+                            BitConverter.ToSingle(attributeBuffers["position"].Item1, i * 12 + 8)
+                        );
+
+                        node.octreeGeometry.colors[i] = new Color32(
+                            attributeBuffers["rgba"].Item1[i * 4],
+                            attributeBuffers["rgba"].Item1[i * 4 + 1],
+                            attributeBuffers["rgba"].Item1[i * 4 + 2],
+                            attributeBuffers["rgba"].Item1[i * 4 + 3]
+                        );
+                    }
+
+                    node.loaded = true;
+                    node.loading = false;
+                    numNodesLoading--;
+                });
+                } catch (Exception e) {
+                    Debug.LogError(e.Message);
+                }
+            });
 
 //             let workerPath;
 //             if(this.metadata.encoding === "BROTLI"){
@@ -159,6 +219,7 @@ namespace FastPoints {
         void ParseHierarchy(OctreeGeometryNode node, byte[] buffer) {
             int bytesPerNode = 22;
             int numNodes = buffer.Length / bytesPerNode;
+            List<string> proxies = new List<string>();
 
             OctreeGeometry octree = node.octreeGeometry;
             OctreeGeometryNode[] nodes = new OctreeGeometryNode[numNodes];
@@ -167,6 +228,9 @@ namespace FastPoints {
 
             for(int i = 0; i < numNodes; i++) {
                 OctreeGeometryNode current = nodes[i];
+
+                if (current.name == "r0256")
+                    node = node;
 
                 byte type = (byte)BitConverter.ToChar(buffer, i * bytesPerNode + 0);
                 byte childMask = (byte)BitConverter.ToChar(buffer, i * bytesPerNode + 1);
@@ -181,6 +245,7 @@ namespace FastPoints {
                     current.numPoints = numPoints;
                 } else if (type == 2) {
                     // load proxy
+                    proxies.Add(current.name);
                     current.hierarchyByteOffset = byteOffset;
                     current.hierarchyByteSize = byteSize;
                     current.numPoints = numPoints;
@@ -221,21 +286,37 @@ namespace FastPoints {
                     current.children[childIndex] = child;
                     child.parent = current;
 
+                    OctreeGeometry geometry = new OctreeGeometry();
+                    geometry.root = child;
+                    geometry.boundingBox = childAABB;
+                    geometry.loader = this;
+                    geometry.scale = current.octreeGeometry.scale;  // bad here, just mvp
+                    geometry.offset = current.octreeGeometry.offset;
+                    child.octreeGeometry = geometry;
+
                     // nodes.push(child);
                     nodes[nodePos] = child;
                     nodePos++;
                 }
             }
+
+            if (PointCloudLoader.debug)
+                Debug.Log($"Parsing hierarchy. Starting with node {node.name} and buffer with {numNodes} nodes. Hit proxies: {String.Join(' ', proxies.ToArray())}");
         }
 
         async Task LoadHierarchy(OctreeGeometryNode node){
             int hierarchyByteOffset = (int)node.hierarchyByteOffset;
             int hierarchyByteSize = (int)node.hierarchyByteSize;
 
-            string hierarchyPath = $"{this.path}/../hierarchy.bin";
+            if (PointCloudLoader.debug)
+                Debug.Log($"Load hierarchy with byte offset {hierarchyByteOffset} and size {hierarchyByteSize}");
+
+            string hierarchyPath = $"{Directory.GetParent(this.path).ToString()}/hierarchy.bin";
 
             byte[] buffer = new byte[hierarchyByteSize];
-            File.Open(pathOctree, FileMode.Open).Read(buffer, hierarchyByteOffset, hierarchyByteSize);
+            FileStream fs = File.Open(hierarchyPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+            fs.Seek(hierarchyByteOffset, SeekOrigin.Begin);
+            fs.Read(buffer, 0, hierarchyByteSize);
 
             ParseHierarchy(node, buffer);
         }

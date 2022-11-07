@@ -15,18 +15,24 @@ namespace FastPoints {
         public bool showPath = false;
 
         // FPS Logging
-        public int averageInterval = 10;
+        public int averageInterval = 60;
         int sample = 0;
         float intervalAverage = 0;
         public bool resetFPSCount;
         public bool debugFPSCount;
+        public bool logFPS;
         List<float> fpsCounts = new List<float>();
         string fpsCountString = "";
         FileStream fs;
 
         public void LogFPS(string target = "fps.csv") {
-            Debug.Log($"Log FPS: {string.Join(",", fpsCounts)}");
-            File.WriteAllTextAsync("fps.csv", string.Join(",", fpsCounts));
+            Debug.Log($"Log FPS");
+            File.WriteAllTextAsync("fps.csv", string.Join("\n", fpsCounts));
+        }
+
+        public void ResetFPS() {
+            fpsCounts.Clear();
+            fpsCountString = "";
         }
 
         public void Update() {
@@ -35,15 +41,19 @@ namespace FastPoints {
 
             if (resetFPSCount) {
                 Debug.Log("Reset FPS Count");
-                fpsCounts.Clear();
-                fpsCountString = "";
+                ResetFPS();
                 resetFPSCount = false;
+            }
+
+            if (logFPS) {
+                LogFPS();
+                logFPS = false;
             }
 
             if (debugFPSCount) {
                 Debug.Log("Debug FPS Count");
                 string output = string.Join(",", fpsCounts);
-                // Debug.Log("FPS Debug: " + output);
+                Debug.Log("FPS Debug: " + output);
                 
                 debugFPSCount = false;
             }
