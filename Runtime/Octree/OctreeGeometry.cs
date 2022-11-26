@@ -4,12 +4,14 @@ using System.Numerics;
 
 using Vector3 = UnityEngine.Vector3;
 
-namespace FastPoints {
+namespace FastPoints
+{
 
-    public class OctreeGeometry {
+    public class OctreeGeometry
+    {
         public string path;
         public float[] scale;
-		public float spacing;
+        public float spacing;
         public AABB boundingBox;
         public OctreeGeometryNode root;
         public PointAttributes pointAttributes;
@@ -17,19 +19,20 @@ namespace FastPoints {
         public string projection;
         public Vector3 offset;
         public ComputeBuffer posBuffer;
-        public Vector3[] positions;
         public ComputeBuffer colBuffer;
-        public Color32[] colors;
 
-        public void Dispose() {
-            if (posBuffer != null) {
+        public void Dispose()
+        {
+            if (posBuffer != null)
+            {
                 posBuffer.Release();
                 colBuffer.Release();
             }
         }
     }
-    
-    public class OctreeGeometryNode : TreeNode {
+
+    public class OctreeGeometryNode
+    {
 
         static int IDCount = 0;
 
@@ -55,10 +58,11 @@ namespace FastPoints {
         public bool loaded;
 
 
-        public OctreeGeometryNode(string name, OctreeGeometry octreeGeometry, AABB boundingBox){
+        public OctreeGeometryNode(string name, OctreeGeometry octreeGeometry, AABB boundingBox)
+        {
             this.id = IDCount++;
             this.name = name;
-            this.index = (int)Char.GetNumericValue(name[name.Length-1]);
+            this.index = (int)Char.GetNumericValue(name[name.Length - 1]);
             this.octreeGeometry = octreeGeometry;
             this.boundingBox = boundingBox;
             // this.boundingSphere = boundingBox.getBoundingSphere(new THREE.Sphere());
@@ -67,36 +71,32 @@ namespace FastPoints {
             this.level = -1;
         }
 
-        // public List<PointCloudTreeNode> GetChildren() {
-        //     List<PointCloudTreeNode> children = new List<PointCloudTreeNode>();
+        public void Load()
+        {
+            try
+            {
+                //if (NodeLoader.numNodesLoading >= NodeLoader.maxNodesLoading) {
+                //    return;
+                //}
 
-        //     for (let i = 0; i < 8; i++) 
-        //         if (this.children[i] != null)
-        //             children.Add(this.children[i]);
-
-        //     return children;
-        // }
-
-        public void Load() {
-            try {
-            //if (NodeLoader.numNodesLoading >= NodeLoader.maxNodesLoading) {
-            //    return;
-            //}
-
-            octreeGeometry.loader.Load(this);
-            } catch (Exception e)
+                octreeGeometry.loader.Load(this);
+            }
+            catch (Exception e)
             {
                 Debug.LogError($"Got error message: {e.Message}, backtrace: {e.ToString()}");
             }
         }
 
-        public void Dispose() {
-            if (this.octreeGeometry != null && this.parent != null) {
+        public bool Dispose()
+        {
+            if (this.loaded && this.octreeGeometry != null && this.parent != null)
+            {
+                NodeLoader.numNodesLoaded--;
                 this.octreeGeometry.Dispose();
-                // this.octreeGeometry = null;
                 this.loaded = false;
                 if (PointCloudLoader.debug)
                     Debug.Log("Unloading node " + name);
+                return true;
 
                 // // this.dispatchEvent( { type: 'dispose' } );
                 // for (let i = 0; i < this.oneTimeDisposeHandlers.length; i++) {
@@ -105,6 +105,7 @@ namespace FastPoints {
                 // }
                 // this.oneTimeDisposeHandlers = [];
             }
+            return false;
         }
 
     }

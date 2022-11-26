@@ -7,9 +7,11 @@ using System.Threading.Tasks;
 
 using Vector3 = UnityEngine.Vector3;
 
-namespace FastPoints {
+namespace FastPoints
+{
 
-    public class Node {
+    public class Node
+    {
         public string name;
         public bool loaded;
         public bool loading;
@@ -21,36 +23,44 @@ namespace FastPoints {
         public BigInteger hierarchyByteSize;
     }
 
-    public class NodeLoader {
+    public class NodeLoader
+    {
         public static int numNodesLoading = 0;
         public static int maxNodesLoading = 20;
+        public static int numNodesLoaded = 0;
         public Metadata metadata;
         public PointAttributes attributes;
         public float[] offset;
-		public float[] scale;
+        public float[] scale;
         public string pathOctree;
 
         public string path = "";
         Dispatcher dispatcher;
 
-        public NodeLoader(string path, Dispatcher dispatcher){
+        public NodeLoader(string path, Dispatcher dispatcher)
+        {
             this.path = path;
             this.dispatcher = dispatcher;
         }
 
-        public async void Load(OctreeGeometryNode node) {
+        public async void Load(OctreeGeometryNode node)
+        {
 
-            if (node.loaded || node.loading) {
+            if (node.loaded || node.loading)
+            {
                 return;
             }
 
             node.loading = true;
             numNodesLoading++;
 
-            if (node.nodeType == 2){
-                try {
-                await LoadHierarchy(node);
-                } catch (Exception e) { Debug.LogError(e.ToString()); }
+            if (node.nodeType == 2)
+            {
+                try
+                {
+                    await LoadHierarchy(node);
+                }
+                catch (Exception e) { Debug.LogError(e.ToString()); }
             }
 
             Int64 byteSize = node.byteSize;
@@ -60,10 +70,13 @@ namespace FastPoints {
 
             byte[] buffer;
 
-            if (byteSize == 0) {
+            if (byteSize == 0)
+            {
                 buffer = new byte[0];
                 Debug.LogWarning($"loaded node with 0 bytes: {node.name}");
-            } else {
+            }
+            else
+            {
                 buffer = new byte[byteSize];
                 FileStream fs = File.Open(pathOctree, FileMode.Open, FileAccess.Read, FileShare.Read);
                 fs.Seek(byteOffset, SeekOrigin.Begin);
@@ -71,7 +84,9 @@ namespace FastPoints {
                 // fs.Close();
             }
 
-            if (node.numPoints == 0) {
+            if (node.numPoints == 0)
+            {
+                numNodesLoaded++;
                 node.loaded = true;
                 node.loading = false;
                 numNodesLoading--;
@@ -79,144 +94,135 @@ namespace FastPoints {
                 return;
             }
 
-            await Task.Run(() => {
-                try {
-                Dictionary<string, Tuple<byte[], PointAttribute>> attributeBuffers = Decoder.Decode(new DecoderInput(
-                    buffer, 
-                    attributes,
-                    node.octreeGeometry.scale, 
-                    node.name, 
-                    node.boundingBox.Min + node.octreeGeometry.offset, 
-                    node.boundingBox.Max + node.octreeGeometry.offset,
-                    node.boundingBox.Max - node.boundingBox.Min,
-                    node.octreeGeometry.offset,
-                    (int)node.numPoints
-                ));
+            await Task.Run(() =>
+            {
+                try
+                {
+                    Dictionary<string, Tuple<byte[], PointAttribute>> attributeBuffers = Decoder.Decode(new DecoderInput(
+                        buffer,
+                        attributes,
+                        node.octreeGeometry.scale,
+                        node.name,
+                        node.boundingBox.Min + node.octreeGeometry.offset,
+                        node.boundingBox.Max + node.octreeGeometry.offset,
+                        node.boundingBox.Max - node.boundingBox.Min,
+                        node.octreeGeometry.offset,
+                        (int)node.numPoints
+                    ));
 
-                dispatcher.Enqueue(() => {
-                    node.octreeGeometry.posBuffer = new ComputeBuffer((int)node.numPoints, 12);
-                    node.octreeGeometry.posBuffer.SetData(attributeBuffers["position"].Item1);
-                    node.octreeGeometry.colBuffer = new ComputeBuffer((int)node.numPoints, 4);
-                    node.octreeGeometry.colBuffer.SetData(attributeBuffers["rgba"].Item1);
+                    dispatcher.Enqueue(() =>
+                    {
+                        node.octreeGeometry.posBuffer = new ComputeBuffer((int)node.numPoints, 12);
+                        node.octreeGeometry.posBuffer.SetData(attributeBuffers["position"].Item1);
+                        node.octreeGeometry.colBuffer = new ComputeBuffer((int)node.numPoints, 4);
+                        node.octreeGeometry.colBuffer.SetData(attributeBuffers["rgba"].Item1);
 
-                    node.octreeGeometry.positions = new Vector3[(int)node.numPoints];
-                    node.octreeGeometry.colors = new Color32[(int)node.numPoints];
-                    for (int i = 0; i < node.numPoints; i++) {
-                        node.octreeGeometry.positions[i] = new Vector3(
-                            BitConverter.ToSingle(attributeBuffers["position"].Item1, i * 12),
-                            BitConverter.ToSingle(attributeBuffers["position"].Item1, i * 12 + 4),
-                            BitConverter.ToSingle(attributeBuffers["position"].Item1, i * 12 + 8)
-                        );
+                        numNodesLoaded++;
 
-                        node.octreeGeometry.colors[i] = new Color32(
-                            attributeBuffers["rgba"].Item1[i * 4],
-                            attributeBuffers["rgba"].Item1[i * 4 + 1],
-                            attributeBuffers["rgba"].Item1[i * 4 + 2],
-                            attributeBuffers["rgba"].Item1[i * 4 + 3]
-                        );
-                    }
-
-                    node.loaded = true;
-                    node.loading = false;
-                    numNodesLoading--;
-                });
-                } catch (Exception e) {
+                        node.loaded = true;
+                        node.loading = false;
+                        numNodesLoading--;
+                    });
+                }
+                catch (Exception e)
+                {
                     Debug.LogError(e.Message);
                 }
             });
 
-//             let workerPath;
-//             if(this.metadata.encoding === "BROTLI"){
-//                 workerPath = Potree.scriptPath + '/workers/2.0/DecoderWorker_brotli.js';
-//             }else{
-//                 workerPath = Potree.scriptPath + '/workers/2.0/DecoderWorker.js';
-//             }
+            //             let workerPath;
+            //             if(this.metadata.encoding === "BROTLI"){
+            //                 workerPath = Potree.scriptPath + '/workers/2.0/DecoderWorker_brotli.js';
+            //             }else{
+            //                 workerPath = Potree.scriptPath + '/workers/2.0/DecoderWorker.js';
+            //             }
 
             // let worker = Potree.workerPool.getWorker(workerPath);
 
-//             worker.onmessage = function (e) {
+            //             worker.onmessage = function (e) {
 
-//                 let data = e.data;
-//                 let buffers = data.attributeBuffers;
+            //                 let data = e.data;
+            //                 let buffers = data.attributeBuffers;
 
-//                 Potree.workerPool.returnWorker(workerPath, worker);
+            //                 Potree.workerPool.returnWorker(workerPath, worker);
 
-//                 let geometry = new THREE.BufferGeometry();
-                
-//                 for(let property in buffers){
+            //                 let geometry = new THREE.BufferGeometry();
 
-//                     let buffer = buffers[property].buffer;
+            //                 for(let property in buffers){
 
-//                     if(property === "position"){
-//                         geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(buffer), 3));
-//                     }else if(property === "rgba"){
-//                         geometry.setAttribute('rgba', new THREE.BufferAttribute(new Uint8Array(buffer), 4, true));
-//                     }else if(property === "NORMAL"){
-//                         //geometry.setAttribute('rgba', new THREE.BufferAttribute(new Uint8Array(buffer), 4, true));
-//                         geometry.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(buffer), 3));
-//                     }else if (property === "INDICES") {
-//                         let bufferAttribute = new THREE.BufferAttribute(new Uint8Array(buffer), 4);
-//                         bufferAttribute.normalized = true;
-//                         geometry.setAttribute('indices', bufferAttribute);
-//                     }else{
-//                         const bufferAttribute = new THREE.BufferAttribute(new Float32Array(buffer), 1);
+            //                     let buffer = buffers[property].buffer;
 
-//                         let batchAttribute = buffers[property].attribute;
-//                         bufferAttribute.potree = {
-//                             offset: buffers[property].offset,
-//                             scale: buffers[property].scale,
-//                             preciseBuffer: buffers[property].preciseBuffer,
-//                             range: batchAttribute.range,
-//                         };
+            //                     if(property === "position"){
+            //                         geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(buffer), 3));
+            //                     }else if(property === "rgba"){
+            //                         geometry.setAttribute('rgba', new THREE.BufferAttribute(new Uint8Array(buffer), 4, true));
+            //                     }else if(property === "NORMAL"){
+            //                         //geometry.setAttribute('rgba', new THREE.BufferAttribute(new Uint8Array(buffer), 4, true));
+            //                         geometry.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(buffer), 3));
+            //                     }else if (property === "INDICES") {
+            //                         let bufferAttribute = new THREE.BufferAttribute(new Uint8Array(buffer), 4);
+            //                         bufferAttribute.normalized = true;
+            //                         geometry.setAttribute('indices', bufferAttribute);
+            //                     }else{
+            //                         const bufferAttribute = new THREE.BufferAttribute(new Float32Array(buffer), 1);
 
-//                         geometry.setAttribute(property, bufferAttribute);
-//                     }
+            //                         let batchAttribute = buffers[property].attribute;
+            //                         bufferAttribute.potree = {
+            //                             offset: buffers[property].offset,
+            //                             scale: buffers[property].scale,
+            //                             preciseBuffer: buffers[property].preciseBuffer,
+            //                             range: batchAttribute.range,
+            //                         };
 
-//                 }
-//                 // indices ??
+            //                         geometry.setAttribute(property, bufferAttribute);
+            //                     }
 
-//                 node.density = data.density;
-//                 node.geometry = geometry;
-//                 node.loaded = true;
-//                 node.loading = false;
-//                 Potree.numNodesLoading--;
-//             };
+            //                 }
+            //                 // indices ??
 
-//             let pointAttributes = node.octreeGeometry.pointAttributes;
-//             let scale = node.octreeGeometry.scale;
+            //                 node.density = data.density;
+            //                 node.geometry = geometry;
+            //                 node.loaded = true;
+            //                 node.loading = false;
+            //                 Potree.numNodesLoading--;
+            //             };
 
-//             let box = node.boundingBox;
-//             let min = node.octreeGeometry.offset.clone().add(box.min);
-//             let size = box.max.clone().sub(box.min);
-//             let max = min.clone().add(size);
-//             let numPoints = node.numPoints;
+            //             let pointAttributes = node.octreeGeometry.pointAttributes;
+            //             let scale = node.octreeGeometry.scale;
 
-//             let offset = node.octreeGeometry.loader.offset;
+            //             let box = node.boundingBox;
+            //             let min = node.octreeGeometry.offset.clone().add(box.min);
+            //             let size = box.max.clone().sub(box.min);
+            //             let max = min.clone().add(size);
+            //             let numPoints = node.numPoints;
 
-//             let message = {
-//                 name: node.name,
-//                 buffer: buffer,
-//                 pointAttributes: pointAttributes,
-//                 scale: scale,
-//                 min: min,
-//                 max: max,
-//                 size: size,
-//                 offset: offset,
-//                 numPoints: numPoints
-//             };
+            //             let offset = node.octreeGeometry.loader.offset;
 
-//             worker.postMessage(message, [message.buffer]);
-        // }catch(e){
-        //     node.loaded = false;
-        //     node.loading = false;
-        //     Potree.numNodesLoading--;
+            //             let message = {
+            //                 name: node.name,
+            //                 buffer: buffer,
+            //                 pointAttributes: pointAttributes,
+            //                 scale: scale,
+            //                 min: min,
+            //                 max: max,
+            //                 size: size,
+            //                 offset: offset,
+            //                 numPoints: numPoints
+            //             };
 
-        //     console.log(`failed to load ${node.name}`);
-        //     console.log(e);
-        //     console.log(`trying again!`);
+            //             worker.postMessage(message, [message.buffer]);
+            // }catch(e){
+            //     node.loaded = false;
+            //     node.loading = false;
+            //     Potree.numNodesLoading--;
+
+            //     console.log(`failed to load ${node.name}`);
+            //     console.log(e);
+            //     console.log(`trying again!`);
         }
 
-        void ParseHierarchy(OctreeGeometryNode node, byte[] buffer) {
+        void ParseHierarchy(OctreeGeometryNode node, byte[] buffer)
+        {
             int bytesPerNode = 22;
             int numNodes = buffer.Length / bytesPerNode;
             List<string> proxies = new List<string>();
@@ -226,7 +232,8 @@ namespace FastPoints {
             nodes[0] = node;
             int nodePos = 1;
 
-            for(int i = 0; i < numNodes; i++) {
+            for (int i = 0; i < numNodes; i++)
+            {
                 OctreeGeometryNode current = nodes[i];
 
                 if (current.name == "r0256")
@@ -238,38 +245,46 @@ namespace FastPoints {
                 Int64 byteOffset = BitConverter.ToInt64(buffer, i * bytesPerNode + 6);
                 Int64 byteSize = BitConverter.ToInt64(buffer, i * bytesPerNode + 14);
 
-                if (current.nodeType == 2) {
+                if (current.nodeType == 2)
+                {
                     // replace proxy with real node
                     current.byteOffset = byteOffset;
                     current.byteSize = byteSize;
                     current.numPoints = numPoints;
-                } else if (type == 2) {
+                }
+                else if (type == 2)
+                {
                     // load proxy
                     proxies.Add(current.name);
                     current.hierarchyByteOffset = byteOffset;
                     current.hierarchyByteSize = byteSize;
                     current.numPoints = numPoints;
-                } else {
+                }
+                else
+                {
                     // load real node 
                     current.byteOffset = byteOffset;
                     current.byteSize = byteSize;
                     current.numPoints = numPoints;
                 }
 
-                if (current.byteSize == 0) {
+                if (current.byteSize == 0)
+                {
                     // workaround for issue #1125
                     // some inner nodes erroneously report >0 points even though have 0 points
                     // however, they still report a byteSize of 0, so based on that we now set node.numPoints to 0
                     current.numPoints = 0;
                 }
-                
+
                 current.nodeType = type;
 
-                if (current.nodeType == 2) {
+                if (current.nodeType == 2)
+                {
                     continue;
                 }
 
-                for (int childIndex = 0; childIndex < 8; childIndex++) {
+                for (int childIndex = 0; childIndex < 8; childIndex++)
+                {
                     bool childExists = ((1 << childIndex) & childMask) != 0;
 
                     if (!childExists)
@@ -304,7 +319,8 @@ namespace FastPoints {
                 Debug.Log($"Parsing hierarchy. Starting with node {node.name} and buffer with {numNodes} nodes. Hit proxies: {String.Join(' ', proxies.ToArray())}");
         }
 
-        async Task LoadHierarchy(OctreeGeometryNode node){
+        async Task LoadHierarchy(OctreeGeometryNode node)
+        {
             int hierarchyByteOffset = (int)node.hierarchyByteOffset;
             int hierarchyByteSize = (int)node.hierarchyByteSize;
 

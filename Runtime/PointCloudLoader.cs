@@ -15,9 +15,11 @@ using System.Runtime.InteropServices;
 
 using Debug = UnityEngine.Debug;
 
-namespace FastPoints {
+namespace FastPoints
+{
     // [ExecuteInEditMode]
-    public class PointCloudLoader : MonoBehaviour {
+    public class PointCloudLoader : MonoBehaviour
+    {
 
         public static bool debug = false;
 
@@ -29,6 +31,17 @@ namespace FastPoints {
         public int pointBudget = 1000000;
         public bool drawGizmos = true;
         #endregion
+
+        [SerializeField]
+        int visiblePointCount;
+        [SerializeField]
+        int visibleNodeCount;
+        [SerializeField]
+        int loadedNodeCount;
+        [SerializeField]
+        int loadingNodeCount;
+        [SerializeField]
+        bool converted;
 
         bool decimatedGenerated = false;
         NativeArray<Vector3> decimatedPoints;
@@ -68,27 +81,33 @@ namespace FastPoints {
 
         bool firstFrame;
 
-        public void Awake() {
+        public void Awake()
+        {
             dispatcher = new Dispatcher();
             mat = new Material(Shader.Find("Custom/DefaultPoint"));
             queueLock = new object();
         }
 
-        public void Reset() {
+        public void Reset()
+        {
             dispatcher = new Dispatcher();
             oldHandle = null;
         }
 
-        public void Update() {
-            if (handle != oldHandle) {  // If new data put in
+        public void Update()
+        {
+            if (handle != oldHandle)
+            {  // If new data put in
                 Debug.Log("Starting...");
+                converted = handle.Converted;
                 // pathCam.ResetFPS();
                 if (!handle.Converted)
                 {
                     fullInPath = System.IO.Directory.GetCurrentDirectory() + "/" + handle.path;
                     fullOutPath = System.IO.Directory.GetCurrentDirectory() + "/ConvertedClouds/" + Path.GetFileNameWithoutExtension(handle.path);
                     ProcessPointCloud();
-                } else
+                }
+                else
                 {
                     fullOutPath = System.IO.Directory.GetCurrentDirectory() + "/ConvertedClouds/" + Path.GetFileNameWithoutExtension(handle.path);
                     geom = OctreeLoader.Load(fullOutPath + "/metadata.json", dispatcher);
@@ -97,40 +116,17 @@ namespace FastPoints {
                     t.Start();
                     t.SetCamera(cam ?? Camera.current ?? Camera.main, transform.localToWorldMatrix);
                 }
-                //ProcessPointCloud();
             }
 
-            //if (geom != null && geom.root.loaded ) {
-            //    if (createdBuffers)
-            //    {
-            //        mat.hideFlags = HideFlags.DontSave;
-            //        mat.SetBuffer("_Positions", testPos);
-            //        mat.SetBuffer("_Colors", testCol);
-            //        mat.SetFloat("_PointSize", pointSize);
-            //        mat.SetMatrix("_Transform", transform.localToWorldMatrix);
-            //        mat.SetPass(0);
-
-            //        Graphics.DrawProceduralNow(MeshTopology.Points, decimatedCloudSize, 1);
-            //    }
-            //    else
-            //    {
-            //        testPos = new ComputeBuffer(geom.positions.Length, 12);
-            //        testPos.SetData(geom.positions);
-
-            //        testCol = new ComputeBuffer(geom.colors.Length, 4);
-            //        testCol.SetData(geom.colors);
-
-            //        createdBuffers = true;
-            //    }
-            //}
-
-            for (int i = 0; i < actionsPerFrame; i++) {
+            for (int i = 0; i < actionsPerFrame; i++)
+            {
                 Action a;
                 if (dispatcher.TryDequeue(out a))
                     a();
             }
 
-            if (handle.Converted) {
+            if (handle.Converted)
+            {
                 t.SetCamera(cam ?? Camera.current ?? Camera.main, transform.localToWorldMatrix);
                 // Main rendering loop
             }
@@ -138,60 +134,70 @@ namespace FastPoints {
             oldHandle = handle;
         }
 
-        public Queue<OctreeGeometry> SetQueue(Queue<OctreeGeometry> queue) {
-            lock (queueLock) {
+        public Queue<OctreeGeometry> SetQueue(Queue<OctreeGeometry> queue)
+        {
+            lock (queueLock)
+            {
                 Queue<OctreeGeometry> oldQueue = nodesToRender;
                 nodesToRender = new Queue<OctreeGeometry>(queue);
                 return oldQueue;
             }
         }
 
-        public void OnDrawGizmos() {
-        #if UNITY_EDITOR
+        public void OnDrawGizmos()
+        {
+#if UNITY_EDITOR
             // Ensure continuous Update calls.
             if (!Application.isPlaying)
             {
                 UnityEditor.EditorApplication.QueuePlayerLoopUpdate();
                 UnityEditor.SceneView.RepaintAll();
             }
-        #endif
+#endif
         }
 
-        public void OnDrawGizmosSelected() {
+        public void OnDrawGizmosSelected()
+        {
             if (!drawGizmos)
                 return;
 
-            if (cam) {
+            if (cam)
+            {
                 Gizmos.matrix = cam.transform.localToWorldMatrix;
-                Gizmos.DrawFrustum( Vector3.zero, cam.fieldOfView, cam.farClipPlane, cam.nearClipPlane, cam.aspect );
+                Gizmos.DrawFrustum(Vector3.zero, cam.fieldOfView, cam.farClipPlane, cam.nearClipPlane, cam.aspect);
             }
 
-            if (boxesToDraw != null) {
+            if (boxesToDraw != null)
+            {
                 Gizmos.matrix = transform.localToWorldMatrix;
-                foreach (AABB bbox in boxesToDraw) {
-                    Gizmos.DrawWireCube( bbox.Center, bbox.Size );
+                foreach (AABB bbox in boxesToDraw)
+                {
+                    Gizmos.DrawWireCube(bbox.Center, bbox.Size);
                 }
             }
         }
 
 
-        public async Task ProcessPointCloud() {
+        public async Task ProcessPointCloud()
+        {
             string ext = Path.GetExtension(handle.path);
 
             decimatedPoints = new NativeArray<Vector3>(decimatedCloudSize, Allocator.Persistent);
             decimatedColors = new NativeArray<Color32>(decimatedCloudSize, Allocator.Persistent);
 
-            await Task.Run(() => {
+            await Task.Run(() =>
+            {
                 Debug.Log("Starting task " + fullInPath + ", " + fullOutPath);
                 DateTime startTime = DateTime.Now;
                 FastPointsNativeApi.PopulateDecimatedCloud(
-                    fullInPath, 
-                    decimatedPoints, 
-                    decimatedColors, 
+                    fullInPath,
+                    decimatedPoints,
+                    decimatedColors,
                     decimatedCloudSize
                 );
 
-                dispatcher.Enqueue(() => {
+                dispatcher.Enqueue(() =>
+                {
                     decimatedPosBuffer = new ComputeBuffer(decimatedCloudSize, 12);
                     decimatedPosBuffer.SetData(decimatedPoints);
                     decimatedColBuffer = new ComputeBuffer(decimatedCloudSize, 4);
@@ -205,13 +211,15 @@ namespace FastPoints {
                     Double elapsedMillisecs = ((TimeSpan)(endTime - startTime)).TotalMilliseconds;
                     Debug.Log("Generated decimated cloud in " + elapsedMillisecs + " ms");
                 });
-            }).ContinueWith(_ => {
+            }).ContinueWith(_ =>
+            {
                 FastPointsNativeApi.RunConverter(fullInPath, fullOutPath);
 
                 dispatcher.Enqueue(() =>
                 {
                     nodesToRender = new Queue<OctreeGeometry>();
                     handle.Converted = true;
+                    converted = true;
 
                     // pathCam.LogFPS();
                     geom = OctreeLoader.Load(fullOutPath + "/metadata.json", dispatcher);
@@ -222,11 +230,12 @@ namespace FastPoints {
                 });
 
                 Debug.Log("Finished conversion");
-            });        
+            });
         }
 
-        public void RenderNode(OctreeGeometry geom) {
-            Material m = new Material(Shader.Find("Custom/DefaultPoint"));;
+        public void RenderNode(OctreeGeometry geom)
+        {
+            Material m = new Material(Shader.Find("Custom/DefaultPoint")); ;
             m.hideFlags = HideFlags.DontSave;
 
             if (geom.posBuffer == null) // In case disposed during queue traversal
@@ -242,15 +251,24 @@ namespace FastPoints {
             m.SetMatrix("_Transform", transform.localToWorldMatrix);
             m.SetPass(0);
 
-            Graphics.DrawProceduralNow(MeshTopology.Points, geom.positions.Length, 1);
+            visiblePointCount += geom.posBuffer.count;
+            visibleNodeCount++;
+
+            Graphics.DrawProceduralNow(MeshTopology.Points, geom.posBuffer.count, 1);
         }
 
-        public void OnRenderObject() {
-            if (handle == null || nodesToRender == null)
+        public void OnRenderObject()
+        {
+            if (handle == null)
                 return;
 
             if (handle.Converted)
             {
+                visiblePointCount = 0;
+                visibleNodeCount = 0;
+                loadedNodeCount = NodeLoader.numNodesLoaded;
+                loadingNodeCount = NodeLoader.numNodesLoading;
+
                 if (boxesToDraw != null)
                     boxesToDraw.Clear();
                 else
@@ -264,9 +282,11 @@ namespace FastPoints {
 
                 if (frameQueue != null)
                     while (frameQueue.Count > 0)
-                    //if (frameQueue.Count > 0)
+                        //if (frameQueue.Count > 0)
                         RenderNode(frameQueue.Dequeue());
-            } else if (decimatedGenerated) {
+            }
+            else if (decimatedGenerated)
+            {
                 boxesToDraw = null;
 
                 mat.hideFlags = HideFlags.DontSave;
@@ -277,47 +297,9 @@ namespace FastPoints {
                 mat.SetPass(0);
 
                 Graphics.DrawProceduralNow(MeshTopology.Points, decimatedCloudSize, 1);
-            } else
+            }
+            else
                 boxesToDraw = null;
-
-            //if (octreeGenerated && geom.root.loaded)
-            //     RenderNode(geom);
-
-                //if (octreeGenerated && geom.root.loaded)
-                //{
-                //    mat.hideFlags = HideFlags.DontSave;
-
-                //    mat.SetBuffer("_Positions", testPos);
-                //    mat.SetBuffer("_Colors", testCol);
-                //    mat.SetFloat("_PointSize", pointSize);
-                //    mat.SetMatrix("_Transform", transform.localToWorldMatrix);
-                //    mat.SetPass(0);
-
-                //    Graphics.DrawProceduralNow(MeshTopology.Points, geom.positions.Length, 1);
-                //}
-
-                // if (createdBuffers) {
-                //     mat.hideFlags = HideFlags.DontSave;
-                //     mat.SetBuffer("_Positions", testPos);
-                //     mat.SetBuffer("_Colors", testCol);
-                //     mat.SetFloat("_PointSize", pointSize);
-                //     mat.SetMatrix("_Transform", transform.localToWorldMatrix);
-                //     mat.SetPass(0);
-
-                //     Graphics.DrawProceduralNow(MeshTopology.Points, decimatedCloudSize, 1);
-                // }
-
-
-                // if (!octreeGenerated && decimatedGenerated) {
-                //     mat.hideFlags = HideFlags.DontSave;
-                //     mat.SetBuffer("_Positions", decimatedPosBuffer);
-                //     mat.SetBuffer("_Colors", decimatedColBuffer);
-                //     mat.SetFloat("_PointSize", pointSize);
-                //     mat.SetMatrix("_Transform", transform.localToWorldMatrix);
-                //     mat.SetPass(0);
-
-                //     Graphics.DrawProceduralNow(MeshTopology.Points, decimatedCloudSize, 1);
-                // }
         }
     }
 }
