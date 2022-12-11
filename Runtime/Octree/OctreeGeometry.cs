@@ -1,6 +1,8 @@
 using UnityEngine;
 using System;
 using System.Numerics;
+using System.Collections.Generic;
+using System.Buffers;
 
 using Vector3 = UnityEngine.Vector3;
 
@@ -18,6 +20,8 @@ namespace FastPoints
         public NodeLoader loader;
         public string projection;
         public Vector3 offset;
+        public byte[] posBytes;
+        public byte[] colBytes;
         public ComputeBuffer posBuffer;
         public ComputeBuffer colBuffer;
 
@@ -27,6 +31,17 @@ namespace FastPoints
             {
                 posBuffer.Release();
                 colBuffer.Release();
+            }
+        }
+
+        public void Unload()
+        {
+            if (posBytes != null)
+            {
+                ArrayPool<byte>.Shared.Return(posBytes);
+                posBytes = null;
+                ArrayPool<byte>.Shared.Return(colBytes);
+                colBytes = null;
             }
         }
     }
@@ -56,6 +71,11 @@ namespace FastPoints
 
         public bool loading;
         public bool loaded;
+        public bool created;
+        public bool Created
+        {
+            get { return created; }
+        }
 
 
         public OctreeGeometryNode(string name, OctreeGeometry octreeGeometry, AABB boundingBox)
@@ -65,7 +85,6 @@ namespace FastPoints
             this.index = (int)Char.GetNumericValue(name[name.Length - 1]);
             this.octreeGeometry = octreeGeometry;
             this.boundingBox = boundingBox;
-            // this.boundingSphere = boundingBox.getBoundingSphere(new THREE.Sphere());
             this.children = new OctreeGeometryNode[8];
             this.numPoints = 0;
             this.level = -1;
@@ -73,12 +92,10 @@ namespace FastPoints
 
         public void Load()
         {
+            if (name == "r")
+                Debug.Log("Loading r!");
             try
             {
-                //if (NodeLoader.numNodesLoading >= NodeLoader.maxNodesLoading) {
-                //    return;
-                //}
-
                 octreeGeometry.loader.Load(this);
             }
             catch (Exception e)
@@ -87,26 +104,58 @@ namespace FastPoints
             }
         }
 
+        // Must be called from main thread!
+        public bool Create()
+        {
+            try
+            {
+                if (numPoints == 0)
+                    return true;
+
+                if (!loaded || octreeGeometry.posBuffer != null && octreeGeometry.posBuffer.IsValid() || octreeGeometry.colBuffer != null && octreeGeometry.colBuffer.IsValid())
+                    return false;
+
+                if (octreeGeometry.posBytes == null || octreeGeometry.colBytes == null)
+                    throw new Exception("Bytes not loaded!");
+
+                octreeGeometry.posBuffer = new ComputeBuffer((int)numPoints, 12);
+                octreeGeometry.posBuffer.SetData(octreeGeometry.posBytes, 0, 0, (int)numPoints * 12);
+                octreeGeometry.colBuffer = new ComputeBuffer((int)numPoints, 4);
+                octreeGeometry.colBuffer.SetData(octreeGeometry.colBytes, 0, 0, (int)numPoints * 4);
+
+                created = true;
+            }
+            catch (Exception e)
+            {
+                Debug.LogError(e.ToString());
+            }
+
+            return true;
+        }
+
         public bool Dispose()
         {
             if (this.loaded && this.octreeGeometry != null && this.parent != null)
             {
                 NodeLoader.numNodesLoaded--;
                 this.octreeGeometry.Dispose();
-                this.loaded = false;
-                if (PointCloudLoader.debug)
-                    Debug.Log("Unloading node " + name);
+                created = false;
                 return true;
-
-                // // this.dispatchEvent( { type: 'dispose' } );
-                // for (let i = 0; i < this.oneTimeDisposeHandlers.length; i++) {
-                //     let handler = this.oneTimeDisposeHandlers[i];
-                //     handler();
-                // }
-                // this.oneTimeDisposeHandlers = [];
             }
             return false;
         }
 
+        public bool Unload()
+        {
+            if (this.name == "r")
+                Debug.Log("Unloading r!");
+            if (this.loaded && this.octreeGeometry != null)
+            {
+                octreeGeometry.Unload();
+                loaded = false;
+                return true;
+            }
+            return false;
+        }
     }
 }

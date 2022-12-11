@@ -4,9 +4,9 @@ using UnityEditor;
 
 namespace FastPoints
 {
-    [CustomEditor(typeof(PointCloudLoader))]
+    [CustomEditor(typeof(PointCloudRenderer))]
     [CanEditMultipleObjects]
-    public class PointCloudLoaderEditor : Editor
+    public class PointCloudRendererEditor : Editor
     {
         SerializedProperty handle;
         SerializedProperty decimatedCloudSize;
@@ -19,7 +19,11 @@ namespace FastPoints
         SerializedProperty visibleNodeCount;
         SerializedProperty loadedNodeCount;
         SerializedProperty loadingNodeCount;
+        SerializedProperty queuedActionCount;
+        SerializedProperty cacheSize;
         SerializedProperty converted;
+        SerializedProperty converterStatus;
+        SerializedProperty cachePoints;
 
         void OnEnable()
         {
@@ -34,7 +38,11 @@ namespace FastPoints
             visibleNodeCount = serializedObject.FindProperty("visibleNodeCount");
             loadedNodeCount = serializedObject.FindProperty("loadedNodeCount");
             loadingNodeCount = serializedObject.FindProperty("loadingNodeCount");
+            queuedActionCount = serializedObject.FindProperty("queuedActionCount");
+            cacheSize = serializedObject.FindProperty("cacheSize");
+            cachePoints = serializedObject.FindProperty("cachePoints");
             converted = serializedObject.FindProperty("converted");
+            converterStatus = serializedObject.FindProperty("converterStatus");
         }
 
         public override void OnInspectorGUI()
@@ -54,8 +62,15 @@ namespace FastPoints
             {
                 EditorGUILayout.LabelField($"Points rendering: {visiblePointCount.intValue}");
                 EditorGUILayout.LabelField($"Nodes rendering: {visibleNodeCount.intValue}");
-                EditorGUILayout.LabelField($"Nodes loaded: {loadedNodeCount.intValue}");
+                // EditorGUILayout.LabelField($"Nodes loaded: {loadedNodeCount.intValue}");
                 EditorGUILayout.LabelField($"Nodes loading: {loadingNodeCount.intValue}");
+                EditorGUILayout.LabelField($"Queued actions: {queuedActionCount.intValue}");
+                EditorGUILayout.LabelField($"Cached nodes: {cacheSize.intValue}");
+                EditorGUILayout.LabelField($"Points in cache: {cachePoints.intValue}");
+            }
+            else
+            {
+                EditorGUILayout.LabelField($"Converter status: {converterStatus.stringValue}");
             }
         }
     }

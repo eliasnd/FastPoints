@@ -3,35 +3,54 @@ using System.Threading.Tasks;
 using System.Threading;
 using System.Collections.Concurrent;
 
-namespace FastPoints {
+namespace FastPoints
+{
     // Dispatches Actions to main thread for execution
-    public class Dispatcher {
+    public class Dispatcher
+    {
         ConcurrentQueue<Action> actions;
 
-        public int Count {
+        public int Count
+        {
             get { return actions.Count; }
         }
 
-        public Dispatcher() {
+        public Dispatcher()
+        {
             actions = new ConcurrentQueue<Action>();
         }
 
-        public void Enqueue(Action a) {
+        public void Enqueue(Action a)
+        {
             actions.Enqueue(a);
         }
 
-        public async Task EnqueueAsync(Action a) {
-            await Task.Run(() => {
+        public async Task EnqueueAsync(Action a)
+        {
+            await Task.Run(() =>
+            {
                 bool actionComplete = false;
-                actions.Enqueue( () => { a(); actionComplete = true; } );
+                actions.Enqueue(() => { a(); actionComplete = true; });
                 while (!actionComplete)
                     Thread.Sleep(50);
                 return;
             });
         }
 
-        public bool TryDequeue(out Action a) {
+        public bool TryDequeue(out Action a)
+        {
             return actions.TryDequeue(out a);
+        }
+
+        // Only call from main thread!
+        public void ExecuteActions(int maxActions)
+        {
+            for (int i = 0; i < maxActions; i++)
+            {
+                Action a;
+                if (TryDequeue(out a))
+                    a();
+            }
         }
     }
 }

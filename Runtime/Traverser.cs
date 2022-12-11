@@ -12,7 +12,7 @@ namespace FastPoints
         public Vector3 camPosition;
         public float screenHeight;
         public float fov;
-        public PointCloudLoader loader;
+        public PointCloudRenderer loader;
         public Dispatcher dispatcher;
         public NodeLoader nodeLoader;
         public OctreeGeometry geometry;
@@ -26,7 +26,7 @@ namespace FastPoints
         Thread thread;
         TraversalParams p;
 
-        public Traverser(OctreeGeometry geometry, NodeLoader nodeLoader, PointCloudLoader loader, int pointBudget, Dispatcher dispatcher)
+        public Traverser(OctreeGeometry geometry, NodeLoader nodeLoader, PointCloudRenderer loader, int pointBudget, Dispatcher dispatcher)
         {
             p = new TraversalParams();
             p.geometry = geometry;
@@ -78,27 +78,50 @@ namespace FastPoints
 
             int renderedCount = 0;
             uint renderedPoints = 0;
+            int maxNodesToRender;
 
-            void TraverseNode(OctreeGeometryNode n, SimplePriorityQueue<OctreeGeometryNode> nodeQueue, Queue<OctreeGeometry> geomQueue)
+            string explanation = "";
+
+            void TraverseNode(OctreeGeometryNode n, SimplePriorityQueue<OctreeGeometryNode> nodeQueue, Queue<OctreeGeometryNode> geomQueue, Queue<OctreeGeometryNode> deleteQueue)
             {
+                string explanationLine = $"Traversing node {n.name}";
                 if (n.loaded)
                 {
-                    if (n.numPoints > 0 && renderedPoints + n.numPoints < p.pointBudget)
+                    if (n.numPoints > 0 && renderedPoints + n.numPoints < p.pointBudget && (n.Created || maxNodesToRender > 0))
                     {
+                        lock (PointCloudRenderer.Cache)
+                        {
+                            PointCloudRenderer.Cache.TryRemove(n);
+                        }
+                        explanationLine += $", rendering. Created = {n.Created}. ";
                         renderedCount++;
-                        geomQueue.Enqueue(n.octreeGeometry);
+                        geomQueue.Enqueue(n);
                         renderedPoints += n.numPoints;
+                        if (!n.Created)
+                            maxNodesToRender--;
+                    }
+                    else
+                    {
+                        explanationLine += $", not rendering. NumPoints is {n.numPoints}, pointBudget is {p.pointBudget}, created is {n.Created} and maxRender is {maxNodesToRender}. ";
                     }
 
                 }
                 else if (!n.loading)
                 {
+                    explanationLine += ", loading. ";
                     lock (p)
                     {
                         p.loadedNodeCount++;
                     }
                     n.Load();
                 }
+                else
+                {
+                    explanationLine += ", already loading. ";
+                }
+
+                string loadLine = "Queuing children ";
+                string deleteLine = "Deleting children ";
 
                 for (int i = 0; i < 8; i++)
                 {
@@ -108,26 +131,19 @@ namespace FastPoints
 
                     double size = RenderSize(c);
                     if (size > 0 || c.level <= 2)
-                        nodeQueue.Enqueue(n.children[i], -1 * (float)size);   // Dequeue returns min priority
-                    else if (c.loaded)
                     {
-                        p.dispatcher.Enqueue(() =>
-                        {
-                            try
-                            {
-                                if (c.Dispose())
-                                    lock (p)
-                                    {
-                                        p.loadedNodeCount--;
-                                    }
-                            }
-                            catch (Exception e)
-                            {
-                                Debug.LogError("Here");
-                            }
-                        });
+                        loadLine += c.name + " ";
+                        nodeQueue.Enqueue(c, -1 * (float)size);   // Dequeue returns min priority
+
+                    }
+                    else if (c.Created)
+                    {
+                        deleteLine += c.name + " ";
+                        deleteQueue.Enqueue(c);
                     }
                 }
+
+                explanation += explanationLine + loadLine + ". " + deleteLine + ".\n";
             }
 
             double RenderSize(OctreeGeometryNode n)
@@ -146,39 +162,32 @@ namespace FastPoints
 
             SimplePriorityQueue<OctreeGeometryNode> nodeQueue = new SimplePriorityQueue<OctreeGeometryNode>();
 
-            // Swap queues to save memory
-            Queue<OctreeGeometry> queue1 = new Queue<OctreeGeometry>();
-            Queue<OctreeGeometry> queue2 = new Queue<OctreeGeometry>();
-
-            Queue<OctreeGeometry> nodesToRender = queue1;
-            p.loader.SetQueue(queue2);
-
             while (!p.stopSignal)
             {
+                maxNodesToRender = 30;
                 renderedCount = 0;
                 renderedPoints = 0;
-                nodesToRender.Clear();
+                explanation = "";
+                Queue<OctreeGeometryNode> nodesToRender = new Queue<OctreeGeometryNode>();
+                Queue<OctreeGeometryNode> nodesToDelete = new Queue<OctreeGeometryNode>();
 
                 nodeQueue.Enqueue(p.geometry.root, 0);
 
-                // int traversalCount = 0;x
                 int c = 0;
                 while (nodeQueue.Count > 0)
                 {
                     c++;
                     OctreeGeometryNode n = nodeQueue.Dequeue();
-                    TraverseNode(n, nodeQueue, nodesToRender);
+                    TraverseNode(n, nodeQueue, nodesToRender, nodesToDelete);
                 }
 
-                if (PointCloudLoader.debug)
+                if (PointCloudRenderer.debug)
                     Debug.Log($"Rendering {renderedCount} nodes, {renderedPoints} points");
+                if (renderedCount < 100)
+                    Debug.Log(explanation);
 
-                nodesToRender = p.loader.SetQueue(nodesToRender);
+                p.loader.SetQueues(nodesToRender, nodesToDelete);
             }
         }
-
-
-
-
     }
 }

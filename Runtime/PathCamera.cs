@@ -2,9 +2,11 @@ using UnityEngine;
 using System.Collections.Generic;
 using System.IO;
 
-namespace FastPoints {
-    [ExecuteInEditMode]
-    public class PathCamera : MonoBehaviour {
+namespace FastPoints
+{
+    // [ExecuteInEditMode]
+    public class PathCamera : MonoBehaviour
+    {
         public float transitionDuration = 2.5f;
         public Vector3[] positions;
         int currIdx = 0;
@@ -25,40 +27,47 @@ namespace FastPoints {
         string fpsCountString = "";
         FileStream fs;
 
-        public void LogFPS(string target = "fps.csv") {
+        public void LogFPS(string target = "fps.csv")
+        {
             Debug.Log($"Log FPS");
             File.WriteAllTextAsync("fps.csv", string.Join("\n", fpsCounts));
         }
 
-        public void ResetFPS() {
+        public void ResetFPS()
+        {
             fpsCounts.Clear();
             fpsCountString = "";
         }
 
-        public void Update() {
+        public void Update()
+        {
             if (positions.Length <= 1)
                 return;
 
-            if (resetFPSCount) {
+            if (resetFPSCount)
+            {
                 Debug.Log("Reset FPS Count");
                 ResetFPS();
                 resetFPSCount = false;
             }
 
-            if (logFPS) {
+            if (logFPS)
+            {
                 LogFPS();
                 logFPS = false;
             }
 
-            if (debugFPSCount) {
+            if (debugFPSCount)
+            {
                 Debug.Log("Debug FPS Count");
                 string output = string.Join(",", fpsCounts);
                 Debug.Log("FPS Debug: " + output);
-                
+
                 debugFPSCount = false;
             }
 
-            if (sample == averageInterval) {
+            if (sample == averageInterval)
+            {
                 fpsCounts.Add(intervalAverage / averageInterval);
                 sample = 0;
                 intervalAverage = 0;
@@ -79,10 +88,11 @@ namespace FastPoints {
             lr.loop = true;
             lr.SetPositions(positions);
 
-            if (t >= 1) {
+            if (t >= 1)
+            {
                 t = 0;
                 currIdx = nextIdx;
-                nextIdx = (currIdx+1) % positions.Length;
+                nextIdx = (currIdx + 1) % positions.Length;
             }
             transform.position = Vector3.Lerp(positions[currIdx], positions[nextIdx], t);
             t += Time.deltaTime / transitionDuration;

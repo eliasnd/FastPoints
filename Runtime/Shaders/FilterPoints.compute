@@ -1,0 +1,52 @@
+// test.compute
+
+#pragma kernel FilterPoints
+
+RWTexture2D<float4> res;
+
+// Params
+uint _ScreenX;
+uint _ScreenY;
+
+// Inputs
+RWStructuredBuffer<float3> _Positions;
+RWStructuredBuffer<uint> _Colors;
+int _PointCount;
+
+// Outputs
+RWTexture2D<uint> _LockTex;
+RWTexture2D<unorm float> _DepthTex;
+RWTexture2D<float4> _ColTex;
+
+[numthreads(1,1,1)]
+void FilterPoints (uint3 dtid : SV_DispatchThreadID)
+{
+    float3 pos = _Positions[dtid].xy;
+    int idx = dtid.x;
+    if (idx > _PointCount)
+        return;
+
+        
+
+    if (_DepthTex[idx] <)
+
+    float3 pos = _Positions[idx];
+    uint col = _Colors[idx];
+    res[dtid.xy] = float4(1,0,0,1);
+}
+
+void doCriticalPart(int2 coord) {
+   bool keepWaiting = true;
+   while(keepWaiting) {
+      uint originalValue;
+      // try to set the mutex to 1
+      InterlockedCompareExchange(mutex[coord], 0, 1, originalValue);
+      if(originalValue == 0) { // nothing was locked (previous entry was 0)
+         // do your stuff
+         // unlock mutex again
+         InterlockedExchange(mutex[coord], 0, originalValue);
+         // exit loop
+         keepWaiting = false;
+      }
+   }
+}

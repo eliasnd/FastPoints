@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Numerics;
 using System.Threading.Tasks;
+using System.Buffers;
 
 using Vector3 = UnityEngine.Vector3;
 
@@ -35,21 +36,16 @@ namespace FastPoints
         public string pathOctree;
 
         public string path = "";
-        Dispatcher dispatcher;
 
-        public NodeLoader(string path, Dispatcher dispatcher)
+        public NodeLoader(string path)
         {
             this.path = path;
-            this.dispatcher = dispatcher;
         }
 
         public async void Load(OctreeGeometryNode node)
         {
-
-            if (node.loaded || node.loading)
-            {
+            if (node.loaded || node.loading || numNodesLoading > maxNodesLoading)
                 return;
-            }
 
             node.loading = true;
             numNodesLoading++;
@@ -63,39 +59,39 @@ namespace FastPoints
                 catch (Exception e) { Debug.LogError(e.ToString()); }
             }
 
-            Int64 byteSize = node.byteSize;
-            Int64 byteOffset = node.byteOffset;
-
-            pathOctree = $"{Directory.GetParent(path).ToString()}/octree.bin";
-
-            byte[] buffer;
-
-            if (byteSize == 0)
-            {
-                buffer = new byte[0];
-                Debug.LogWarning($"loaded node with 0 bytes: {node.name}");
-            }
-            else
-            {
-                buffer = new byte[byteSize];
-                FileStream fs = File.Open(pathOctree, FileMode.Open, FileAccess.Read, FileShare.Read);
-                fs.Seek(byteOffset, SeekOrigin.Begin);
-                fs.Read(buffer, 0, (int)byteSize);
-                // fs.Close();
-            }
-
-            if (node.numPoints == 0)
-            {
-                numNodesLoaded++;
-                node.loaded = true;
-                node.loading = false;
-                numNodesLoading--;
-
-                return;
-            }
-
             await Task.Run(() =>
             {
+                Int64 byteSize = node.byteSize;
+                Int64 byteOffset = node.byteOffset;
+
+                pathOctree = $"{Directory.GetParent(path).ToString()}/octree.bin";
+
+                byte[] buffer;
+
+                if (byteSize == 0)
+                {
+                    buffer = new byte[0];
+                    Debug.LogWarning($"loaded node with 0 bytes: {node.name}");
+                }
+                else
+                {
+                    buffer = new byte[byteSize];
+                    FileStream fs = File.Open(pathOctree, FileMode.Open, FileAccess.Read, FileShare.Read);
+                    fs.Seek(byteOffset, SeekOrigin.Begin);
+                    fs.Read(buffer, 0, (int)byteSize);
+                    // fs.Close();
+                }
+
+                if (node.numPoints == 0)
+                {
+                    numNodesLoaded++;
+                    node.loaded = true;
+                    node.loading = false;
+                    numNodesLoading--;
+
+                    return;
+                }
+
                 try
                 {
                     Dictionary<string, Tuple<byte[], PointAttribute>> attributeBuffers = Decoder.Decode(new DecoderInput(
@@ -110,115 +106,27 @@ namespace FastPoints
                         (int)node.numPoints
                     ));
 
-                    dispatcher.Enqueue(() =>
+                    node.octreeGeometry.posBytes = ArrayPool<Byte>.Shared.Rent((int)node.numPoints * 12);
+                    attributeBuffers["position"].Item1.CopyTo(node.octreeGeometry.posBytes, 0);
+                    node.octreeGeometry.colBytes = ArrayPool<Byte>.Shared.Rent((int)node.numPoints * 4);
+                    attributeBuffers["rgba"].Item1.CopyTo(node.octreeGeometry.colBytes, 0);
+
+                    node.loaded = true;
+                    node.loading = false;
+                    numNodesLoading--;
+
+                    lock (PointCloudRenderer.Cache)
                     {
-                        node.octreeGeometry.posBuffer = new ComputeBuffer((int)node.numPoints, 12);
-                        node.octreeGeometry.posBuffer.SetData(attributeBuffers["position"].Item1);
-                        node.octreeGeometry.colBuffer = new ComputeBuffer((int)node.numPoints, 4);
-                        node.octreeGeometry.colBuffer.SetData(attributeBuffers["rgba"].Item1);
-
-                        numNodesLoaded++;
-
-                        node.loaded = true;
-                        node.loading = false;
-                        numNodesLoading--;
-                    });
+                        if (node.name == "r")
+                            Debug.Log("Load inserting r");
+                        PointCloudRenderer.Cache.Insert(node);
+                    }
                 }
                 catch (Exception e)
                 {
-                    Debug.LogError(e.Message);
+                    Debug.LogError(e.ToString());
                 }
             });
-
-            //             let workerPath;
-            //             if(this.metadata.encoding === "BROTLI"){
-            //                 workerPath = Potree.scriptPath + '/workers/2.0/DecoderWorker_brotli.js';
-            //             }else{
-            //                 workerPath = Potree.scriptPath + '/workers/2.0/DecoderWorker.js';
-            //             }
-
-            // let worker = Potree.workerPool.getWorker(workerPath);
-
-            //             worker.onmessage = function (e) {
-
-            //                 let data = e.data;
-            //                 let buffers = data.attributeBuffers;
-
-            //                 Potree.workerPool.returnWorker(workerPath, worker);
-
-            //                 let geometry = new THREE.BufferGeometry();
-
-            //                 for(let property in buffers){
-
-            //                     let buffer = buffers[property].buffer;
-
-            //                     if(property === "position"){
-            //                         geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(buffer), 3));
-            //                     }else if(property === "rgba"){
-            //                         geometry.setAttribute('rgba', new THREE.BufferAttribute(new Uint8Array(buffer), 4, true));
-            //                     }else if(property === "NORMAL"){
-            //                         //geometry.setAttribute('rgba', new THREE.BufferAttribute(new Uint8Array(buffer), 4, true));
-            //                         geometry.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(buffer), 3));
-            //                     }else if (property === "INDICES") {
-            //                         let bufferAttribute = new THREE.BufferAttribute(new Uint8Array(buffer), 4);
-            //                         bufferAttribute.normalized = true;
-            //                         geometry.setAttribute('indices', bufferAttribute);
-            //                     }else{
-            //                         const bufferAttribute = new THREE.BufferAttribute(new Float32Array(buffer), 1);
-
-            //                         let batchAttribute = buffers[property].attribute;
-            //                         bufferAttribute.potree = {
-            //                             offset: buffers[property].offset,
-            //                             scale: buffers[property].scale,
-            //                             preciseBuffer: buffers[property].preciseBuffer,
-            //                             range: batchAttribute.range,
-            //                         };
-
-            //                         geometry.setAttribute(property, bufferAttribute);
-            //                     }
-
-            //                 }
-            //                 // indices ??
-
-            //                 node.density = data.density;
-            //                 node.geometry = geometry;
-            //                 node.loaded = true;
-            //                 node.loading = false;
-            //                 Potree.numNodesLoading--;
-            //             };
-
-            //             let pointAttributes = node.octreeGeometry.pointAttributes;
-            //             let scale = node.octreeGeometry.scale;
-
-            //             let box = node.boundingBox;
-            //             let min = node.octreeGeometry.offset.clone().add(box.min);
-            //             let size = box.max.clone().sub(box.min);
-            //             let max = min.clone().add(size);
-            //             let numPoints = node.numPoints;
-
-            //             let offset = node.octreeGeometry.loader.offset;
-
-            //             let message = {
-            //                 name: node.name,
-            //                 buffer: buffer,
-            //                 pointAttributes: pointAttributes,
-            //                 scale: scale,
-            //                 min: min,
-            //                 max: max,
-            //                 size: size,
-            //                 offset: offset,
-            //                 numPoints: numPoints
-            //             };
-
-            //             worker.postMessage(message, [message.buffer]);
-            // }catch(e){
-            //     node.loaded = false;
-            //     node.loading = false;
-            //     Potree.numNodesLoading--;
-
-            //     console.log(`failed to load ${node.name}`);
-            //     console.log(e);
-            //     console.log(`trying again!`);
         }
 
         void ParseHierarchy(OctreeGeometryNode node, byte[] buffer)
@@ -315,7 +223,7 @@ namespace FastPoints
                 }
             }
 
-            if (PointCloudLoader.debug)
+            if (PointCloudRenderer.debug)
                 Debug.Log($"Parsing hierarchy. Starting with node {node.name} and buffer with {numNodes} nodes. Hit proxies: {String.Join(' ', proxies.ToArray())}");
         }
 
@@ -324,7 +232,7 @@ namespace FastPoints
             int hierarchyByteOffset = (int)node.hierarchyByteOffset;
             int hierarchyByteSize = (int)node.hierarchyByteSize;
 
-            if (PointCloudLoader.debug)
+            if (PointCloudRenderer.debug)
                 Debug.Log($"Load hierarchy with byte offset {hierarchyByteOffset} and size {hierarchyByteSize}");
 
             string hierarchyPath = $"{Directory.GetParent(this.path).ToString()}/hierarchy.bin";
