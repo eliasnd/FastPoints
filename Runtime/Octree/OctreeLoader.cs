@@ -113,14 +113,11 @@ namespace FastPoints
             return attributes;
         }
 
-        public static OctreeGeometry Load(string path, Dispatcher dispatcher)
+        public static OctreeGeometry Load(string path)
         {
-            Debug.Log("Start load");
             Metadata metadata = JSONParser.FromJson<Metadata>(System.IO.File.ReadAllText(path));
-            Debug.Log("Got metadata");
 
             PointAttributes attributes = ParseAttributes(metadata.attributes);
-            Debug.Log($"Got {attributes.attributes.Count} attributes");
 
             NodeLoader loader = new NodeLoader(path);
             loader.metadata = metadata;

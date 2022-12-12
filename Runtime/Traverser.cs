@@ -13,7 +13,6 @@ namespace FastPoints
         public float screenHeight;
         public float fov;
         public PointCloudRenderer loader;
-        public Dispatcher dispatcher;
         public NodeLoader nodeLoader;
         public OctreeGeometry geometry;
         public int pointBudget;
@@ -26,14 +25,13 @@ namespace FastPoints
         Thread thread;
         TraversalParams p;
 
-        public Traverser(OctreeGeometry geometry, NodeLoader nodeLoader, PointCloudRenderer loader, int pointBudget, Dispatcher dispatcher)
+        public Traverser(OctreeGeometry geometry, NodeLoader nodeLoader, PointCloudRenderer loader, int pointBudget)
         {
             p = new TraversalParams();
             p.geometry = geometry;
             p.nodeLoader = nodeLoader;
             p.loader = loader;
             p.pointBudget = pointBudget;
-            p.dispatcher = dispatcher;
 
             thread = new Thread(new ParameterizedThreadStart(TraversalThread));
         }

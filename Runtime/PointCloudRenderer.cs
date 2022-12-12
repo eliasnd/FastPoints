@@ -45,7 +45,6 @@ namespace FastPoints
 
         bool octreeGenerated = true;
 
-        Dispatcher dispatcher;
         ComputeShader computeShader;
         PointCloudHandle oldHandle = null;
         Traverser t;
@@ -69,7 +68,6 @@ namespace FastPoints
 
         public void Awake()
         {
-            dispatcher = new Dispatcher();
             mat = new Material(Shader.Find("Custom/DefaultPoint"));
             queueLock = new object();
             converter = new PointCloudConverter();
@@ -77,7 +75,6 @@ namespace FastPoints
 
         public void Update()
         {
-            queuedActionCount = dispatcher.Count;
             cacheSize = PointCloudRenderer.Cache?.Size ?? 0;
             cachePoints = PointCloudRenderer.Cache?.NumPoints ?? 0;
             converterStatus = converter.Status switch
@@ -89,8 +86,6 @@ namespace FastPoints
                 PointCloudConverter.ConversionStatus.DONE => "Done",
                 PointCloudConverter.ConversionStatus.ABORTED => "Aborted",
             };
-
-            dispatcher.ExecuteActions(actionsPerFrame);
 
             if (handle == null)
             {
@@ -125,9 +120,9 @@ namespace FastPoints
         public void InitializeRendering()
         {
             string fullOutPath = Directory.GetCurrentDirectory() + "/ConvertedClouds/" + Path.GetFileNameWithoutExtension(handle.path);
-            geom = OctreeLoader.Load(fullOutPath + "/metadata.json", dispatcher);
+            geom = OctreeLoader.Load(fullOutPath + "/metadata.json");
 
-            t = new Traverser(geom, geom.loader, this, pointBudget, dispatcher);
+            t = new Traverser(geom, geom.loader, this, pointBudget);
             t.Start();
         }
 
