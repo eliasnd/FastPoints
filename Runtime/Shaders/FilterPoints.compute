@@ -12,41 +12,58 @@ uint _ScreenY;
 RWStructuredBuffer<float3> _Positions;
 RWStructuredBuffer<uint> _Colors;
 int _PointCount;
+int _ThreadBudget;
+float4x4 _MVP;
 
 // Outputs
-RWTexture2D<uint> _LockTex;
-RWTexture2D<unorm float> _DepthTex;
+RWStructuredBuffer<uint> _LockBuffer;
+RWTexture2D<float> _DepthTex;
 RWTexture2D<float4> _ColTex;
+
+half4 parseColor(uint icol) {
+    return half4(
+        ((icol      ) & 0xff) / 255.0, 
+        ((icol >>  8) & 0xff) / 255.0,
+        ((icol >> 16) & 0xff) / 255.0,
+        ((icol >> 24) & 0xff) / 255.0
+    );
+}
 
 [numthreads(1,1,1)]
 void FilterPoints (uint3 dtid : SV_DispatchThreadID)
 {
-    float3 pos = _Positions[dtid].xy;
-    int idx = dtid.x;
-    if (idx > _PointCount)
+    int idx = dtid.x * _ThreadBudget;
+    if (idx + _ThreadBudget >= _PointCount)
         return;
+    
+    for (int i = idx; i < idx + _ThreadBudget; i++) {
+        float3 pos = _Positions[idx];
 
-        
+        float4 clipPos = mul(_MVP, float4(pos, 1));
+        float3 ndc = clipPos.xyz / clipPos.w;
+        float2 screenCoords = (ndc.xy / 2 + float2(0.5f, 0.5f)) * float2(_ScreenX, _ScreenY);
+        int screenCoordIdx = screenCoords.y * _ScreenX + screenCoords.x;
 
-    if (_DepthTex[idx] <)
+        if (_DepthTex[screenCoords] <= ndc.z)
+            return;
 
-    float3 pos = _Positions[idx];
-    uint col = _Colors[idx];
-    res[dtid.xy] = float4(1,0,0,1);
-}
+        bool wait = true;
+        while (wait) {
+            uint originalValue;
+            InterlockedCompareExchange(_LockBuffer[screenCoordIdx], 0, 1, originalValue);
 
-void doCriticalPart(int2 coord) {
-   bool keepWaiting = true;
-   while(keepWaiting) {
-      uint originalValue;
-      // try to set the mutex to 1
-      InterlockedCompareExchange(mutex[coord], 0, 1, originalValue);
-      if(originalValue == 0) { // nothing was locked (previous entry was 0)
-         // do your stuff
-         // unlock mutex again
-         InterlockedExchange(mutex[coord], 0, originalValue);
-         // exit loop
-         keepWaiting = false;
-      }
-   }
+            if (originalValue == 0) {
+                if (_DepthTex[screenCoords] <= ndc.z)
+                    return;
+
+                _ColTex[screenCoords] = parseColor(_Colors[idx]);
+                _DepthTex[screenCoords] = ndc.z;
+
+                // Unlock mutex
+                InterlockedExchange(_LockBuffer[screenCoordIdx], 0, originalValue);
+
+                wait = false;
+            }
+        }
+    }
 }
