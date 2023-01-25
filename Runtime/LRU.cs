@@ -25,7 +25,7 @@ namespace FastPoints
         int elements;
         int numPoints;
         public int NumPoints { get { return numPoints; } }
-        int pointLoadLimit = 5000000;
+        public int pointLoadLimit = 5000000;
         public int Size { get { return elements; } }
 
         public LRU()
@@ -44,8 +44,6 @@ namespace FastPoints
 
         public bool Insert(OctreeGeometryNode node)
         {
-            if (node.name == "r")
-                Debug.Log("Inserting node r");
             if (!Contains(node))
             {
                 FreeMemory((int)node.numPoints);
@@ -112,8 +110,6 @@ namespace FastPoints
 
         public bool TryRemove(OctreeGeometryNode node)
         {
-            if (node.name == "r")
-                Debug.Log("Try remove r");
             try
             {
                 LRUItem item;
@@ -192,7 +188,6 @@ namespace FastPoints
 
         public void DisposeDescendants(OctreeGeometryNode node)
         {
-            Debug.Log($"Removing root {node.name}");
             Stack<OctreeGeometryNode> stack = new Stack<OctreeGeometryNode>();
             stack.Push(node);
             while (stack.Count > 0)

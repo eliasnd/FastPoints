@@ -12,12 +12,13 @@ namespace FastPoints
         public Vector3 camPosition;
         public float screenHeight;
         public float fov;
-        public PointCloudRenderer loader;
-        public NodeLoader nodeLoader;
+        public PointCloudRenderer renderer;
         public OctreeGeometry geometry;
         public int pointBudget;
         public bool stopSignal = false;
         public int loadedNodeCount = 0;
+        public int maxNodesToRender = 30;
+        public int maxNodesToLoad = 10;
     }
 
     public class Traverser
@@ -25,12 +26,11 @@ namespace FastPoints
         Thread thread;
         TraversalParams p;
 
-        public Traverser(OctreeGeometry geometry, NodeLoader nodeLoader, PointCloudRenderer loader, int pointBudget)
+        public Traverser(OctreeGeometry geometry, PointCloudRenderer renderer, int pointBudget)
         {
             p = new TraversalParams();
             p.geometry = geometry;
-            p.nodeLoader = nodeLoader;
-            p.loader = loader;
+            p.renderer = renderer;
             p.pointBudget = pointBudget;
 
             thread = new Thread(new ParameterizedThreadStart(TraversalThread));
@@ -49,6 +49,23 @@ namespace FastPoints
                 count = p.loadedNodeCount;
             }
             return count;
+        }
+
+        public void SetPointBudget(int pointBudget)
+        {
+            lock (p)
+            {
+                p.pointBudget = pointBudget;
+            }
+        }
+
+        public void SetPerFrameNodeCounts(int maxLoaded, int maxRendered)
+        {
+            lock (p)
+            {
+                p.maxNodesToLoad = maxLoaded;
+                p.maxNodesToRender = maxRendered;
+            }
         }
 
         public void Stop()
@@ -77,6 +94,7 @@ namespace FastPoints
             int renderedCount = 0;
             uint renderedPoints = 0;
             int maxNodesToRender;
+            int maxNodesToLoad;
 
             string explanation = "";
 
@@ -106,12 +124,16 @@ namespace FastPoints
                 }
                 else if (!n.loading)
                 {
-                    explanationLine += ", loading. ";
-                    lock (p)
+                    if (maxNodesToLoad > 0)
                     {
-                        p.loadedNodeCount++;
+                        explanationLine += ", loading. ";
+                        lock (p)
+                        {
+                            p.loadedNodeCount++;
+                        }
+                        n.Load();
+                        maxNodesToLoad--;
                     }
-                    n.Load();
                 }
                 else
                 {
@@ -152,7 +174,7 @@ namespace FastPoints
 
                 float minNodeSize = 10;
 
-                if (!Utils.TestPlanesAABB(p.frustum, n.boundingBox) || projectedSize < minNodeSize) // If bbox outside camera or too small
+                if (!Utils.TestPlanesAABB(p.frustum, n.boundingBox, p.geometry.offset, p.geometry.scale) || projectedSize < minNodeSize) // If bbox outside camera or too small
                     return 0;
                 else
                     return projectedSize;
@@ -162,7 +184,21 @@ namespace FastPoints
 
             while (!p.stopSignal)
             {
-                maxNodesToRender = 30;
+                bool noCamera;
+
+                lock (p)
+                {
+                    maxNodesToRender = p.maxNodesToRender;
+                    maxNodesToLoad = p.maxNodesToLoad;
+                    noCamera = p.frustum == null;
+                }
+
+                if (noCamera)
+                {
+                    Thread.Sleep(100);
+                    continue;
+                }
+
                 renderedCount = 0;
                 renderedPoints = 0;
                 explanation = "";
@@ -181,10 +217,8 @@ namespace FastPoints
 
                 if (PointCloudRenderer.debug)
                     Debug.Log($"Rendering {renderedCount} nodes, {renderedPoints} points");
-                if (renderedCount < 100)
-                    Debug.Log(explanation);
 
-                p.loader.SetQueues(nodesToRender, nodesToDelete);
+                p.renderer.SetQueues(nodesToRender, nodesToDelete);
             }
         }
     }

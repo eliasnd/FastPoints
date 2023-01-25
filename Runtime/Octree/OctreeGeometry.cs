@@ -17,7 +17,6 @@ namespace FastPoints
         public AABB boundingBox;
         public OctreeGeometryNode root;
         public PointAttributes pointAttributes;
-        public NodeLoader loader;
         public string projection;
         public Vector3 offset;
         public byte[] posBytes;
@@ -96,7 +95,7 @@ namespace FastPoints
                 Debug.Log("Loading r!");
             try
             {
-                octreeGeometry.loader.Load(this);
+                NodeLoader.Enqueue(this);
             }
             catch (Exception e)
             {
@@ -137,7 +136,10 @@ namespace FastPoints
         {
             if (this.loaded && this.octreeGeometry != null && this.parent != null)
             {
-                NodeLoader.numNodesLoaded--;
+                lock (NodeLoader.loaderLock)
+                {
+                    NodeLoader.nodesLoaded--;
+                }
                 this.octreeGeometry.Dispose();
                 created = false;
                 return true;

@@ -119,11 +119,7 @@ namespace FastPoints
 
             PointAttributes attributes = ParseAttributes(metadata.attributes);
 
-            NodeLoader loader = new NodeLoader(path);
-            loader.metadata = metadata;
-            loader.attributes = attributes;
-            loader.scale = metadata.scale;
-            loader.offset = metadata.offset;
+            NodeLoader.Start(path, metadata, attributes, metadata.scale, metadata.offset);
 
             OctreeGeometry octree = new OctreeGeometry();
             octree.path = path;
@@ -148,7 +144,6 @@ namespace FastPoints
             // 		octree.tightBoundingSphere = boundingBox.getBoundingSphere(new THREE.Sphere());
             octree.offset = offset;
             octree.pointAttributes = ParseAttributes(metadata.attributes);
-            octree.loader = loader;
 
             OctreeGeometryNode root = new OctreeGeometryNode("r", octree, boundingBox);
             root.level = 0;
@@ -161,7 +156,7 @@ namespace FastPoints
 
             octree.root = root;
 
-            loader.Load(root);
+            NodeLoader.Enqueue(root);
 
             return octree;
         }

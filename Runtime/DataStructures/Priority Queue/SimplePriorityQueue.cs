@@ -1,4 +1,26 @@
-﻿using System;
+﻿// The MIT License (MIT)
+
+// Copyright (c) 2013 Daniel "BlueRaja" Pflughoeft
+
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+// THE SOFTWARE.
+
+using System;
 using System.Collections;
 using System.Collections.Generic;
 
@@ -141,7 +163,7 @@ namespace FastPoints
         {
             get
             {
-                lock(_queue)
+                lock (_queue)
                 {
                     return _queue.Count;
                 }
@@ -157,9 +179,9 @@ namespace FastPoints
         {
             get
             {
-                lock(_queue)
+                lock (_queue)
                 {
-                    if(_queue.Count <= 0)
+                    if (_queue.Count <= 0)
                     {
                         throw new InvalidOperationException("Cannot call .First on an empty queue");
                     }
@@ -175,7 +197,7 @@ namespace FastPoints
         /// </summary>
         public void Clear()
         {
-            lock(_queue)
+            lock (_queue)
             {
                 _queue.Clear();
                 _itemToNodesCache.Clear();
@@ -189,7 +211,7 @@ namespace FastPoints
         /// </summary>
         public bool Contains(TItem item)
         {
-            lock(_queue)
+            lock (_queue)
             {
                 return item == null ? _nullNodesCache.Count > 0 : _itemToNodesCache.ContainsKey(item);
             }
@@ -202,14 +224,14 @@ namespace FastPoints
         /// </summary>
         public TItem Dequeue()
         {
-            lock(_queue)
+            lock (_queue)
             {
-                if(_queue.Count <= 0)
+                if (_queue.Count <= 0)
                 {
                     throw new InvalidOperationException("Cannot call Dequeue() on an empty queue");
                 }
 
-                SimpleNode node =_queue.Dequeue();
+                SimpleNode node = _queue.Dequeue();
                 RemoveFromNodeCache(node);
                 return node.Data;
             }
@@ -240,7 +262,7 @@ namespace FastPoints
         /// </summary>
         public void Enqueue(TItem item, TPriority priority)
         {
-            lock(_queue)
+            lock (_queue)
             {
                 IList<SimpleNode> nodes;
                 if (item == null)
@@ -265,7 +287,7 @@ namespace FastPoints
         /// </summary>
         public bool EnqueueWithoutDuplicates(TItem item, TPriority priority)
         {
-            lock(_queue)
+            lock (_queue)
             {
                 IList<SimpleNode> nodes;
                 if (item == null)
@@ -299,7 +321,7 @@ namespace FastPoints
         /// </summary>
         public void Remove(TItem item)
         {
-            lock(_queue)
+            lock (_queue)
             {
                 SimpleNode removeMe;
                 IList<SimpleNode> nodes;
@@ -363,7 +385,7 @@ namespace FastPoints
             lock (_queue)
             {
                 SimpleNode findMe = GetExistingNode(item);
-                if(findMe == null)
+                if (findMe == null)
                 {
                     throw new InvalidOperationException("Cannot call GetPriority() on a node which is not enqueued: " + item);
                 }
@@ -415,7 +437,7 @@ namespace FastPoints
                     }
                 }
             }
-            
+
             first = default(TItem);
             return false;
         }
@@ -429,7 +451,7 @@ namespace FastPoints
         /// </summary>
         public bool TryRemove(TItem item)
         {
-            lock(_queue)
+            lock (_queue)
             {
                 SimpleNode removeMe;
                 IList<SimpleNode> nodes;
@@ -471,10 +493,10 @@ namespace FastPoints
         /// </summary>
         public bool TryUpdatePriority(TItem item, TPriority priority)
         {
-            lock(_queue)
+            lock (_queue)
             {
                 SimpleNode updateMe = GetExistingNode(item);
-                if(updateMe == null)
+                if (updateMe == null)
                 {
                     return false;
                 }
@@ -494,10 +516,10 @@ namespace FastPoints
         /// </summary>
         public bool TryGetPriority(TItem item, out TPriority priority)
         {
-            lock(_queue)
+            lock (_queue)
             {
                 SimpleNode findMe = GetExistingNode(item);
-                if(findMe == null)
+                if (findMe == null)
                 {
                     priority = default(TPriority);
                     return false;
@@ -514,7 +536,7 @@ namespace FastPoints
             lock (_queue)
             {
                 //Copy to a separate list because we don't want to 'yield return' inside a lock
-                foreach(var node in _queue)
+                foreach (var node in _queue)
                 {
                     queueData.Add(node.Data);
                 }
@@ -530,7 +552,7 @@ namespace FastPoints
 
         public bool IsValidQueue()
         {
-            lock(_queue)
+            lock (_queue)
             {
                 // Check all items in cache are in the queue
                 foreach (IList<SimpleNode> nodes in _itemToNodesCache.Values)

@@ -1,4 +1,26 @@
-﻿using System;
+﻿// The MIT License (MIT)
+
+// Copyright (c) 2013 Daniel "BlueRaja" Pflughoeft
+
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+// THE SOFTWARE.
+
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
@@ -167,7 +189,7 @@ namespace FastPoints
             {
                 parent = node.QueueIndex >> 1;
                 TItem parentNode = _nodes[parent];
-                if(HasHigherPriority(parentNode, node))
+                if (HasHigherPriority(parentNode, node))
                     return;
 
                 //Node has lower priority value, so move parent down the heap to make room
@@ -180,11 +202,11 @@ namespace FastPoints
             {
                 return;
             }
-            while(parent > 1)
+            while (parent > 1)
             {
                 parent >>= 1;
                 TItem parentNode = _nodes[parent];
-                if(HasHigherPriority(parentNode, node))
+                if (HasHigherPriority(parentNode, node))
                     break;
 
                 //Node has lower priority value, so move parent down the heap to make room
@@ -206,7 +228,7 @@ namespace FastPoints
             int childLeftIndex = 2 * finalQueueIndex;
 
             // If leaf node, we're done
-            if(childLeftIndex > _numNodes)
+            if (childLeftIndex > _numNodes)
             {
                 return;
             }
@@ -214,10 +236,10 @@ namespace FastPoints
             // Check if the left-child is higher-priority than the current node
             int childRightIndex = childLeftIndex + 1;
             TItem childLeft = _nodes[childLeftIndex];
-            if(HasHigherPriority(childLeft, node))
+            if (HasHigherPriority(childLeft, node))
             {
                 // Check if there is a right child. If not, swap and finish.
-                if(childRightIndex > _numNodes)
+                if (childRightIndex > _numNodes)
                 {
                     node.QueueIndex = childLeftIndex;
                     childLeft.QueueIndex = finalQueueIndex;
@@ -227,7 +249,7 @@ namespace FastPoints
                 }
                 // Check if the left-child is higher-priority than the right-child
                 TItem childRight = _nodes[childRightIndex];
-                if(HasHigherPriority(childLeft, childRight))
+                if (HasHigherPriority(childLeft, childRight))
                 {
                     // left is highest, move it up and continue
                     childLeft.QueueIndex = finalQueueIndex;
@@ -243,7 +265,7 @@ namespace FastPoints
                 }
             }
             // Not swapping with left-child, does right-child exist?
-            else if(childRightIndex > _numNodes)
+            else if (childRightIndex > _numNodes)
             {
                 return;
             }
@@ -251,7 +273,7 @@ namespace FastPoints
             {
                 // Check if the right-child is higher-priority than the current node
                 TItem childRight = _nodes[childRightIndex];
-                if(HasHigherPriority(childRight, node))
+                if (HasHigherPriority(childRight, node))
                 {
                     childRight.QueueIndex = finalQueueIndex;
                     _nodes[finalQueueIndex] = childRight;
@@ -264,12 +286,12 @@ namespace FastPoints
                 }
             }
 
-            while(true)
+            while (true)
             {
                 childLeftIndex = 2 * finalQueueIndex;
 
                 // If leaf node, we're done
-                if(childLeftIndex > _numNodes)
+                if (childLeftIndex > _numNodes)
                 {
                     node.QueueIndex = finalQueueIndex;
                     _nodes[finalQueueIndex] = node;
@@ -279,10 +301,10 @@ namespace FastPoints
                 // Check if the left-child is higher-priority than the current node
                 childRightIndex = childLeftIndex + 1;
                 childLeft = _nodes[childLeftIndex];
-                if(HasHigherPriority(childLeft, node))
+                if (HasHigherPriority(childLeft, node))
                 {
                     // Check if there is a right child. If not, swap and finish.
-                    if(childRightIndex > _numNodes)
+                    if (childRightIndex > _numNodes)
                     {
                         node.QueueIndex = childLeftIndex;
                         childLeft.QueueIndex = finalQueueIndex;
@@ -292,7 +314,7 @@ namespace FastPoints
                     }
                     // Check if the left-child is higher-priority than the right-child
                     TItem childRight = _nodes[childRightIndex];
-                    if(HasHigherPriority(childLeft, childRight))
+                    if (HasHigherPriority(childLeft, childRight))
                     {
                         // left is highest, move it up and continue
                         childLeft.QueueIndex = finalQueueIndex;
@@ -308,7 +330,7 @@ namespace FastPoints
                     }
                 }
                 // Not swapping with left-child, does right-child exist?
-                else if(childRightIndex > _numNodes)
+                else if (childRightIndex > _numNodes)
                 {
                     node.QueueIndex = finalQueueIndex;
                     _nodes[finalQueueIndex] = node;
@@ -318,7 +340,7 @@ namespace FastPoints
                 {
                     // Check if the right-child is higher-priority than the current node
                     TItem childRight = _nodes[childRightIndex];
-                    if(HasHigherPriority(childRight, node))
+                    if (HasHigherPriority(childRight, node))
                     {
                         childRight.QueueIndex = finalQueueIndex;
                         _nodes[finalQueueIndex] = childRight;
@@ -373,7 +395,7 @@ namespace FastPoints
 
             TItem returnMe = _nodes[1];
             //If the node is already the last node, we can remove it immediately
-            if(_numNodes == 1)
+            if (_numNodes == 1)
             {
                 _nodes[1] = null;
                 _numNodes = 0;
@@ -475,7 +497,7 @@ namespace FastPoints
             //Bubble the updated node up or down as appropriate
             int parentIndex = node.QueueIndex >> 1;
 
-            if(parentIndex > 0 && HasHigherPriority(node, _nodes[parentIndex]))
+            if (parentIndex > 0 && HasHigherPriority(node, _nodes[parentIndex]))
             {
                 CascadeUp(node);
             }
@@ -512,7 +534,7 @@ namespace FastPoints
 #endif
 
             //If the node is already the last node, we can remove it immediately
-            if(node.QueueIndex == _numNodes)
+            if (node.QueueIndex == _numNodes)
             {
                 _nodes[_numNodes] = null;
                 _numNodes--;
@@ -566,7 +588,7 @@ namespace FastPoints
             IEnumerable<TItem> e = new ArraySegment<TItem>(_nodes, 1, _numNodes);
             return e.GetEnumerator();
 #else
-            for(int i = 1; i <= _numNodes; i++)
+            for (int i = 1; i <= _numNodes; i++)
                 yield return _nodes[i];
 #endif
         }
@@ -582,16 +604,16 @@ namespace FastPoints
         /// </summary>
         public bool IsValidQueue()
         {
-            for(int i = 1; i < _nodes.Length; i++)
+            for (int i = 1; i < _nodes.Length; i++)
             {
-                if(_nodes[i] != null)
+                if (_nodes[i] != null)
                 {
                     int childLeftIndex = 2 * i;
-                    if(childLeftIndex < _nodes.Length && _nodes[childLeftIndex] != null && HasHigherPriority(_nodes[childLeftIndex], _nodes[i]))
+                    if (childLeftIndex < _nodes.Length && _nodes[childLeftIndex] != null && HasHigherPriority(_nodes[childLeftIndex], _nodes[i]))
                         return false;
 
                     int childRightIndex = childLeftIndex + 1;
-                    if(childRightIndex < _nodes.Length && _nodes[childRightIndex] != null && HasHigherPriority(_nodes[childRightIndex], _nodes[i]))
+                    if (childRightIndex < _nodes.Length && _nodes[childRightIndex] != null && HasHigherPriority(_nodes[childRightIndex], _nodes[i]))
                         return false;
                 }
             }

@@ -5,11 +5,21 @@ using System.IO;
 using System.Numerics;
 using System.Threading.Tasks;
 using System.Buffers;
-
-using Vector3 = UnityEngine.Vector3;
+using System.Threading;
 
 namespace FastPoints
 {
+    class LoaderParams
+    {
+        public int numNodesLoading = 0;
+        public Queue<OctreeGeometryNode> loadQueue;
+        public int maxNodesLoading;
+        public int numNodesLoaded = 0;
+        public PointAttributes attributes;
+        public string pathOctree;
+        public string path;
+        public bool stopSignal;
+    }
 
     public class Node
     {
@@ -24,112 +34,159 @@ namespace FastPoints
         public BigInteger hierarchyByteSize;
     }
 
-    public class NodeLoader
+    public static class NodeLoader
     {
-        public static int numNodesLoading = 0;
-        public static int maxNodesLoading = 20;
-        public static int numNodesLoaded = 0;
-        public Metadata metadata;
-        public PointAttributes attributes;
-        public float[] offset;
-        public float[] scale;
-        public string pathOctree;
+        static Thread thread;
+        static LoaderParams p;
+        static int maxNodesLoading = 5;
+        public static int nodesLoading = 0;
+        public static int nodesLoaded = 0;
+        public static object loaderLock = new object();
 
-        public string path = "";
-
-        public NodeLoader(string path)
+        public static void Start(string path, Metadata metadata, PointAttributes attributes, float[] scale, float[] offset)
         {
-            this.path = path;
+            p = new LoaderParams();
+            p.path = path;
+            p.attributes = attributes;
+            p.maxNodesLoading = maxNodesLoading;
+            p.loadQueue = new Queue<OctreeGeometryNode>(maxNodesLoading);
+
+            thread = new Thread(new ParameterizedThreadStart(LoadingThread));
+            thread.Start(p);
         }
 
-        public async void Load(OctreeGeometryNode node)
+        public static void Enqueue(OctreeGeometryNode node)
         {
-            if (node.loaded || node.loading || numNodesLoading > maxNodesLoading)
+            if (node.loaded || node.loading)
                 return;
 
+            lock (p)
+            {
+                if (p.loadQueue.Count >= maxNodesLoading)
+                    return;
+
+                p.loadQueue.Enqueue(node);
+            }
+
+            lock (loaderLock)
+            {
+                nodesLoading++;
+            }
+        }
+
+        // -- ALL METHODS FOLLOWING THIS DO NOT HAPPEN ON MAIN THREAD --
+
+        static void LoadingThread(object obj)
+        {
+            LoaderParams p = (LoaderParams)obj;
+
+            bool stopSignal;
+            lock (p)
+            {
+                stopSignal = p.stopSignal;
+            }
+
+            while (!stopSignal)
+            {
+                OctreeGeometryNode node;
+                string path;
+                PointAttributes attributes;
+                lock (p)
+                {
+                    p.loadQueue.TryDequeue(out node);
+                    path = p.path;
+                    attributes = p.attributes;
+                }
+
+                if (node == null)   // Maybe sleep?
+                    continue;
+
+                Load(node, path, attributes);
+
+                lock (p)
+                {
+                    stopSignal = p.stopSignal;
+                }
+            }
+        }
+        static void Load(OctreeGeometryNode node, string path, PointAttributes attributes)
+        {
             node.loading = true;
-            numNodesLoading++;
 
             if (node.nodeType == 2)
             {
-                try
-                {
-                    await LoadHierarchy(node);
-                }
-                catch (Exception e) { Debug.LogError(e.ToString()); }
+                LoadHierarchy(node, path);
             }
 
-            await Task.Run(() =>
+            Int64 byteSize = node.byteSize;
+            Int64 byteOffset = node.byteOffset;
+
+            string pathOctree = $"{Directory.GetParent(path).ToString()}/octree.bin";
+
+            byte[] buffer;
+
+            if (byteSize == 0)
+                buffer = new byte[0];
+            else
             {
-                Int64 byteSize = node.byteSize;
-                Int64 byteOffset = node.byteOffset;
+                buffer = new byte[byteSize];
+                FileStream fs = File.Open(pathOctree, FileMode.Open, FileAccess.Read, FileShare.Read);
+                fs.Seek(byteOffset, SeekOrigin.Begin);
+                fs.Read(buffer, 0, (int)byteSize);
+                // fs.Close();
+            }
 
-                pathOctree = $"{Directory.GetParent(path).ToString()}/octree.bin";
-
-                byte[] buffer;
-
-                if (byteSize == 0)
+            if (node.numPoints == 0)
+            {
+                lock (NodeLoader.loaderLock)
                 {
-                    buffer = new byte[0];
-                    Debug.LogWarning($"loaded node with 0 bytes: {node.name}");
+                    NodeLoader.nodesLoaded++;
                 }
-                else
+                node.loaded = true;
+                node.loading = false;
+
+                return;
+            }
+
+            try
+            {
+                Dictionary<string, Tuple<byte[], PointAttribute>> attributeBuffers = Decoder.Decode(new DecoderInput(
+                    buffer,
+                    attributes,
+                    node.octreeGeometry.scale,
+                    node.name,
+                    node.boundingBox.Min + node.octreeGeometry.offset,
+                    node.boundingBox.Max + node.octreeGeometry.offset,
+                    node.boundingBox.Max - node.boundingBox.Min,
+                    node.octreeGeometry.offset,
+                    (int)node.numPoints
+                ));
+
+                node.octreeGeometry.posBytes = ArrayPool<Byte>.Shared.Rent((int)node.numPoints * 12);
+                attributeBuffers["position"].Item1.CopyTo(node.octreeGeometry.posBytes, 0);
+                node.octreeGeometry.colBytes = ArrayPool<Byte>.Shared.Rent((int)node.numPoints * 4);
+                attributeBuffers["rgba"].Item1.CopyTo(node.octreeGeometry.colBytes, 0);
+
+                node.loaded = true;
+                node.loading = false;
+
+                lock (NodeLoader.loaderLock)
                 {
-                    buffer = new byte[byteSize];
-                    FileStream fs = File.Open(pathOctree, FileMode.Open, FileAccess.Read, FileShare.Read);
-                    fs.Seek(byteOffset, SeekOrigin.Begin);
-                    fs.Read(buffer, 0, (int)byteSize);
-                    // fs.Close();
+                    NodeLoader.nodesLoading--;
                 }
 
-                if (node.numPoints == 0)
+                lock (PointCloudRenderer.Cache)
                 {
-                    numNodesLoaded++;
-                    node.loaded = true;
-                    node.loading = false;
-                    numNodesLoading--;
-
-                    return;
+                    PointCloudRenderer.Cache.Insert(node);
                 }
-
-                try
-                {
-                    Dictionary<string, Tuple<byte[], PointAttribute>> attributeBuffers = Decoder.Decode(new DecoderInput(
-                        buffer,
-                        attributes,
-                        node.octreeGeometry.scale,
-                        node.name,
-                        node.boundingBox.Min + node.octreeGeometry.offset,
-                        node.boundingBox.Max + node.octreeGeometry.offset,
-                        node.boundingBox.Max - node.boundingBox.Min,
-                        node.octreeGeometry.offset,
-                        (int)node.numPoints
-                    ));
-
-                    node.octreeGeometry.posBytes = ArrayPool<Byte>.Shared.Rent((int)node.numPoints * 12);
-                    attributeBuffers["position"].Item1.CopyTo(node.octreeGeometry.posBytes, 0);
-                    node.octreeGeometry.colBytes = ArrayPool<Byte>.Shared.Rent((int)node.numPoints * 4);
-                    attributeBuffers["rgba"].Item1.CopyTo(node.octreeGeometry.colBytes, 0);
-
-                    node.loaded = true;
-                    node.loading = false;
-                    numNodesLoading--;
-
-                    lock (PointCloudRenderer.Cache)
-                    {
-                        if (node.name == "r")
-                            Debug.Log("Load inserting r");
-                        PointCloudRenderer.Cache.Insert(node);
-                    }
-                }
-                catch (Exception e)
-                {
-                    Debug.LogError(e.ToString());
-                }
-            });
+            }
+            catch (Exception e)
+            {
+                Debug.LogError(e.ToString());
+            }
         }
 
-        void ParseHierarchy(OctreeGeometryNode node, byte[] buffer)
+        static void ParseHierarchy(OctreeGeometryNode node, byte[] buffer)
         {
             int bytesPerNode = 22;
             int numNodes = buffer.Length / bytesPerNode;
@@ -212,7 +269,6 @@ namespace FastPoints
                     OctreeGeometry geometry = new OctreeGeometry();
                     geometry.root = child;
                     geometry.boundingBox = childAABB;
-                    geometry.loader = this;
                     geometry.scale = current.octreeGeometry.scale;  // bad here, just mvp
                     geometry.offset = current.octreeGeometry.offset;
                     child.octreeGeometry = geometry;
@@ -227,15 +283,12 @@ namespace FastPoints
                 Debug.Log($"Parsing hierarchy. Starting with node {node.name} and buffer with {numNodes} nodes. Hit proxies: {String.Join(' ', proxies.ToArray())}");
         }
 
-        async Task LoadHierarchy(OctreeGeometryNode node)
+        static void LoadHierarchy(OctreeGeometryNode node, string path)
         {
             int hierarchyByteOffset = (int)node.hierarchyByteOffset;
             int hierarchyByteSize = (int)node.hierarchyByteSize;
 
-            if (PointCloudRenderer.debug)
-                Debug.Log($"Load hierarchy with byte offset {hierarchyByteOffset} and size {hierarchyByteSize}");
-
-            string hierarchyPath = $"{Directory.GetParent(this.path).ToString()}/hierarchy.bin";
+            string hierarchyPath = $"{Directory.GetParent(path).ToString()}/hierarchy.bin";
 
             byte[] buffer = new byte[hierarchyByteSize];
             FileStream fs = File.Open(hierarchyPath, FileMode.Open, FileAccess.Read, FileShare.Read);
@@ -244,6 +297,5 @@ namespace FastPoints
 
             ParseHierarchy(node, buffer);
         }
-
     }
 }

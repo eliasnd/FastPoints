@@ -1,10 +1,13 @@
 using UnityEngine;
 using System.IO;
 using System.Collections.Generic;
+using UnityEditor;
+
+using Debug = UnityEngine.Debug;
 
 namespace FastPoints
 {
-    // [ExecuteInEditMode]
+    [ExecuteInEditMode]
     public class PointCloudRenderer : MonoBehaviour
     {
         #region public
@@ -13,8 +16,33 @@ namespace FastPoints
         public float pointSize = 1.5f;
         public Camera cam = null;
         public int pointBudget = 1000000;
+        public int cachePointBudget = 5000000;
         public bool drawGizmos = true;
+        public int maxNodesToLoad = 10;
+        public int maxNodesToRender = 30;
+        public bool showDecimatedCloud = false;
         #endregion
+
+        #region dirty_trackers
+        PointCloudHandle oldHandle = null;
+        int oldPointBudget;
+        int oldCachePointBudget = 5000000;
+        int oldMaxNodesToLoad = 10;
+        int oldMaxNodesToRender = 30;
+        #endregion
+
+        # region converter
+        [SerializeField]
+        string source;
+        [SerializeField]
+        string outdir;
+        [SerializeField]
+        string method = "poisson";
+        [SerializeField]
+        string encoding = "default";
+        [SerializeField]
+        string chunkMethod = "LASZIP";
+        # endregion
 
         [SerializeField]
         int visiblePointCount;
@@ -34,6 +62,8 @@ namespace FastPoints
         int cachePoints;
         [SerializeField]
         string converterStatus;
+        [SerializeField]
+        float converterProgress;
 
         bool decimatedGenerated = false;
         ComputeBuffer decimatedPosBuffer = null;
@@ -41,18 +71,9 @@ namespace FastPoints
 
         OctreeGeometry geom;
 
-        int actionsPerFrame = 2;
 
-        bool octreeGenerated = true;
-
-        ComputeShader computeShader;
-        PointCloudHandle oldHandle = null;
         Traverser t;
         PointCloudConverter converter;
-
-        public PathCamera pathCam;
-
-        bool createdBuffers = false;
 
         List<AABB> boxesToDraw = null;
 
@@ -63,8 +84,25 @@ namespace FastPoints
         Queue<OctreeGeometryNode> nodesToRender;
         Queue<OctreeGeometryNode> nodesToDelete;
         object queueLock;
-        public static bool debug = true;
+        public static bool debug = false;
         public static LRU Cache = new LRU();
+
+        public Camera GetCurrentCamera()
+        {
+            if (cam != null)
+                return cam;
+
+            if (SceneView.currentDrawingSceneView != null)
+                return SceneView.currentDrawingSceneView.camera;
+
+            if (Application.isPlaying && Camera.main != null)
+                return Camera.main;
+
+            if (SceneView.lastActiveSceneView != null)
+                return SceneView.lastActiveSceneView.camera;
+
+            return Camera.current;
+        }
 
         public void Awake()
         {
@@ -75,46 +113,72 @@ namespace FastPoints
 
         public void Update()
         {
-            cacheSize = PointCloudRenderer.Cache?.Size ?? 0;
-            cachePoints = PointCloudRenderer.Cache?.NumPoints ?? 0;
+            // Read display params from objects
+
+            cacheSize = PointCloudRenderer.Cache != null ? PointCloudRenderer.Cache.Size : 0;
+            cachePoints = PointCloudRenderer.Cache != null ? PointCloudRenderer.Cache.NumPoints : 0;
             converterStatus = converter.Status switch
             {
                 PointCloudConverter.ConversionStatus.CREATED => "Created",
                 PointCloudConverter.ConversionStatus.STARTING => "Starting",
                 PointCloudConverter.ConversionStatus.DECIMATING => "Decimating",
+                PointCloudConverter.ConversionStatus.WAITING => "Waiting",
                 PointCloudConverter.ConversionStatus.CONVERTING => "Converting",
                 PointCloudConverter.ConversionStatus.DONE => "Done",
                 PointCloudConverter.ConversionStatus.ABORTED => "Aborted",
             };
+            converterProgress = converter.Progress;
 
-            if (handle == null)
+            // Case on passed handle
+
+            if (handle == null)     // No data
             {
                 oldHandle = handle;
                 return;
             }
-
-            if (handle != oldHandle)    // New data put in
+            else if (handle != oldHandle)    // New data put in
             {
                 if (!handle.Converted)
-                    converter.Start(handle, decimatedCloudSize);
+                    converter.Start((source == null || source == "") ? handle.path : source, outdir, method, encoding, chunkMethod, decimatedCloudSize);
                 else
                 {
                     converted = true;
                     InitializeRendering();
                 }
             }
-
-            if (!handle.Converted && converter.Status == PointCloudConverter.ConversionStatus.DONE)
+            else if (!handle.Converted && converter.Status == PointCloudConverter.ConversionStatus.DONE)    // Not new data, conversion finished but handle not updated
             {
                 handle.Converted = true;
                 converted = true;
                 InitializeRendering();
             }
+            else if (handle.Converted)  // Not new data, already converted
+            {
+                Camera c = GetCurrentCamera();
+                if (c != null)
+                {
+                    if (debug)
+                        Debug.Log("Drawing with camera " + c.GetInstanceID());
+                    t.SetCamera(c, transform.localToWorldMatrix);
+                }
+                if (maxNodesToLoad != oldMaxNodesToLoad || maxNodesToRender != oldMaxNodesToRender)
+                    t.SetPerFrameNodeCounts(maxNodesToLoad, maxNodesToRender);
+            }
 
-            if (handle.Converted)
-                t.SetCamera(cam ?? Camera.current ?? Camera.main, transform.localToWorldMatrix);
+            // Check dirty trackers
 
+            if (pointBudget != oldPointBudget && t != null)
+                t.SetPointBudget(pointBudget);
+
+            if (cachePointBudget != oldCachePointBudget)
+            {
+                Cache.pointLoadLimit = cachePointBudget;
+                oldCachePointBudget = cachePointBudget;
+            }
+
+            // Update dirty trackers
             oldHandle = handle;
+            oldPointBudget = pointBudget;
         }
 
         public void InitializeRendering()
@@ -122,7 +186,7 @@ namespace FastPoints
             string fullOutPath = Directory.GetCurrentDirectory() + "/ConvertedClouds/" + Path.GetFileNameWithoutExtension(handle.path);
             geom = OctreeLoader.Load(fullOutPath + "/metadata.json");
 
-            t = new Traverser(geom, geom.loader, this, pointBudget);
+            t = new Traverser(geom, this, pointBudget);
             t.Start();
         }
 
@@ -148,20 +212,18 @@ namespace FastPoints
                 Debug.LogError("Issue in node creation!");
 
             OctreeGeometry geom = node.octreeGeometry;
-            Material m = new Material(Shader.Find("Custom/DefaultPoint")); ;
-            m.hideFlags = HideFlags.DontSave;
 
-            if (geom.posBuffer == null) // In case disposed during queue traversal
+            if (geom.posBuffer == null) // In case disposed during queue traversal 
                 return;
 
             boxesToDraw.Add(geom.boundingBox);
 
-            m.SetVector("_Offset", geom.boundingBox.Min);
-            m.SetBuffer("_Positions", geom.posBuffer);
-            m.SetBuffer("_Colors", geom.colBuffer);
-            m.SetFloat("_PointSize", pointSize);
-            m.SetMatrix("_Transform", transform.localToWorldMatrix);
-            m.SetPass(0);
+            mat.SetVector("_Scale", new Vector3(1f / geom.scale[0], 1f / geom.scale[1], 1f / geom.scale[2]));
+            mat.SetVector("_Offset", geom.boundingBox.Min + this.geom.offset);
+            mat.SetBuffer("_Positions", geom.posBuffer);
+            mat.SetBuffer("_Colors", geom.colBuffer);
+            mat.SetMatrix("_Transform", transform.localToWorldMatrix);
+            mat.SetPass(0);
 
             try
             {
@@ -182,7 +244,12 @@ namespace FastPoints
                 return;
 
             if (handle.Converted)
-                DrawConvertedCloud();  // Full draw call with traverser
+            {
+                if (showDecimatedCloud)
+                    DrawDecimatedCloud();
+                else
+                    DrawConvertedCloud();  // Full draw call with traverser
+            }
             else if (converter.DecimationFinished)
             {
                 if (decimatedPosBuffer == null)
@@ -198,6 +265,8 @@ namespace FastPoints
             boxesToDraw = null;
 
             mat.hideFlags = HideFlags.DontSave;
+            mat.SetVector("_Scale", new Vector3(1f, 1f, 1f));
+            mat.SetVector("_Offset", new Vector3(0f, 0f, 0f));
             mat.SetBuffer("_Positions", decimatedPosBuffer);
             mat.SetBuffer("_Colors", decimatedColBuffer);
             mat.SetFloat("_PointSize", pointSize);
@@ -209,13 +278,18 @@ namespace FastPoints
 
         public void DrawConvertedCloud()
         {
+            mat.SetFloat("_PointSize", pointSize);
+
             if (nodesToRender == null)
                 return;
 
             visiblePointCount = 0;
             visibleNodeCount = 0;
-            loadedNodeCount = NodeLoader.numNodesLoaded;
-            loadingNodeCount = NodeLoader.numNodesLoading;
+            lock (NodeLoader.loaderLock)
+            {
+                loadedNodeCount = NodeLoader.nodesLoaded;
+                loadingNodeCount = NodeLoader.nodesLoading;
+            }
 
             if (boxesToDraw != null)
                 boxesToDraw.Clear();
@@ -230,30 +304,34 @@ namespace FastPoints
                 frameDeleteQueue = new Queue<OctreeGeometryNode>(nodesToDelete);
             }
 
-            if (frameRenderQueue != null)
-            {
-                if (frameRenderQueue.Count < 100)
-                    Debug.Log("smol");
-                while (frameRenderQueue.Count > 0)
-                    RenderNode(frameRenderQueue.Dequeue());
-            }
-
             if (frameDeleteQueue != null)
                 while (frameDeleteQueue.Count > 0)
                 {
                     OctreeGeometryNode node = frameDeleteQueue.Dequeue();
                     if (node.loaded)
                     {
-                        if (!node.Dispose())
-                            Debug.LogError($"Dispose failed! Loaded: #{node.loaded}");
-                        if (node.name == "r")
-                            Debug.Log("Deleting r!");
+                        node.Dispose();
                         lock (PointCloudRenderer.Cache)
                         {
                             PointCloudRenderer.Cache.Insert(node);
                         }
                     }
                 }
+
+            int renderQueueSize = frameRenderQueue?.Count ?? 0;
+            int newlyCreatedNodes = 0;
+
+            if (frameRenderQueue != null)
+            {
+                while (frameRenderQueue.Count > 0)
+                {
+                    OctreeGeometryNode n = frameRenderQueue.Dequeue();
+                    if (!n.Created)
+                        newlyCreatedNodes++;
+
+                    RenderNode(n);
+                }
+            }
         }
 
 
@@ -285,7 +363,8 @@ namespace FastPoints
                 Gizmos.matrix = transform.localToWorldMatrix;
                 foreach (AABB bbox in boxesToDraw)
                 {
-                    Gizmos.DrawWireCube(bbox.Center, bbox.Size);
+                    Vector3 bboxCenter = (bbox.Center + geom.offset);
+                    Gizmos.DrawWireCube(new Vector3(bboxCenter.x / geom.scale[0], bboxCenter.y / geom.scale[1], bboxCenter.z / geom.scale[2]), new Vector3(bbox.Size.x / geom.scale[0], bbox.Size.y / geom.scale[1], bbox.Size.z / geom.scale[2]));
                 }
             }
         }
