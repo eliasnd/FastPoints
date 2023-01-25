@@ -14,6 +14,7 @@ namespace FastPoints
         SerializedProperty cam;
         SerializedProperty pointBudget;
         SerializedProperty drawGizmos;
+        SerializedProperty cachePointBudget;
 
         SerializedProperty visiblePointCount;
         SerializedProperty visibleNodeCount;
@@ -24,6 +25,9 @@ namespace FastPoints
         SerializedProperty converted;
         SerializedProperty converterStatus;
         SerializedProperty cachePoints;
+        SerializedProperty maxNodesToLoad;
+        SerializedProperty maxNodesToRender;
+        SerializedProperty showDecimatedCloud;
 
         void OnEnable()
         {
@@ -33,6 +37,10 @@ namespace FastPoints
             cam = serializedObject.FindProperty("cam");
             pointBudget = serializedObject.FindProperty("pointBudget");
             drawGizmos = serializedObject.FindProperty("drawGizmos");
+            cachePointBudget = serializedObject.FindProperty("cachePointBudget");
+            maxNodesToLoad = serializedObject.FindProperty("maxNodesToLoad");
+            maxNodesToRender = serializedObject.FindProperty("maxNodesToRender");
+
 
             visiblePointCount = serializedObject.FindProperty("visiblePointCount");
             visibleNodeCount = serializedObject.FindProperty("visibleNodeCount");
@@ -43,6 +51,7 @@ namespace FastPoints
             cachePoints = serializedObject.FindProperty("cachePoints");
             converted = serializedObject.FindProperty("converted");
             converterStatus = serializedObject.FindProperty("converterStatus");
+            showDecimatedCloud = serializedObject.FindProperty("showDecimatedCloud");
         }
 
         public override void OnInspectorGUI()
@@ -55,6 +64,10 @@ namespace FastPoints
             EditorGUILayout.PropertyField(cam);
             EditorGUILayout.PropertyField(pointBudget);
             EditorGUILayout.PropertyField(drawGizmos);
+            EditorGUILayout.PropertyField(cachePointBudget);
+            EditorGUILayout.PropertyField(maxNodesToLoad);
+            EditorGUILayout.PropertyField(maxNodesToRender);
+            EditorGUILayout.PropertyField(showDecimatedCloud);
 
             serializedObject.ApplyModifiedProperties();
 
