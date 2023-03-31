@@ -19,12 +19,14 @@ namespace FastPoints
         public int loadedNodeCount = 0;
         public int maxNodesToRender = 30;
         public int maxNodesToLoad = 10;
+        public float minNodeSize = 1;
     }
 
     public class Traverser
     {
         Thread thread;
         TraversalParams p;
+        static bool debug = false;
 
         public Traverser(OctreeGeometry geometry, PointCloudRenderer renderer, int pointBudget)
         {
@@ -68,6 +70,14 @@ namespace FastPoints
             }
         }
 
+        public void SetMinNodeSize(float minNodeSize)
+        {
+            lock (p)
+            {
+                p.minNodeSize = minNodeSize;
+            }
+        }
+
         public void Stop()
         {
             lock (p)
@@ -84,6 +94,9 @@ namespace FastPoints
                 p.camPosition = cam.transform.position;
                 p.screenHeight = cam.pixelRect.height;
                 p.fov = cam.fieldOfView;
+
+                if (debug)
+                    Debug.Log($"Got camera with position {p.camPosition.ToString()}, screenHeight {p.screenHeight}, fov {p.fov}");
             }
         }
 
@@ -95,6 +108,7 @@ namespace FastPoints
             uint renderedPoints = 0;
             int maxNodesToRender;
             int maxNodesToLoad;
+            float minNodeSize;
 
             string explanation = "";
 
@@ -150,7 +164,7 @@ namespace FastPoints
                         continue;
 
                     double size = RenderSize(c);
-                    if (size > 0 || c.level <= 2)
+                    if (size > minNodeSize || c.level <= 2)
                     {
                         loadLine += c.name + " ";
                         nodeQueue.Enqueue(c, -1 * (float)size);   // Dequeue returns min priority
@@ -172,9 +186,7 @@ namespace FastPoints
                 double slope = Math.Tan(p.fov / 2 * Mathf.Deg2Rad);
                 double projectedSize = (p.screenHeight / 2.0) * (n.boundingBox.Size.magnitude / 2) / (slope * distance);
 
-                float minNodeSize = 10;
-
-                if (!Utils.TestPlanesAABB(p.frustum, n.boundingBox, p.geometry.offset, p.geometry.scale) || projectedSize < minNodeSize) // If bbox outside camera or too small
+                if (!Utils.TestPlanesAABB(p.frustum, n.boundingBox, p.geometry.offset, p.geometry.scale)) // If bbox outside camera
                     return 0;
                 else
                     return projectedSize;
@@ -191,6 +203,7 @@ namespace FastPoints
                     maxNodesToRender = p.maxNodesToRender;
                     maxNodesToLoad = p.maxNodesToLoad;
                     noCamera = p.frustum == null;
+                    minNodeSize = p.minNodeSize;
                 }
 
                 if (noCamera)
@@ -215,8 +228,11 @@ namespace FastPoints
                     TraverseNode(n, nodeQueue, nodesToRender, nodesToDelete);
                 }
 
-                if (PointCloudRenderer.debug)
+                if (PointCloudRenderer.debug) {
                     Debug.Log($"Rendering {renderedCount} nodes, {renderedPoints} points");
+                    if (debug)
+                        Debug.Log(explanation);
+                }
 
                 p.renderer.SetQueues(nodesToRender, nodesToDelete);
             }

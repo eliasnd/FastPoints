@@ -78,7 +78,7 @@ namespace FastPoints
         // Write decimated data to passed buffers
         // Must be called from main thread
         // Returns true if buffer population successful, false otherwise
-        public (ComputeBuffer, ComputeBuffer) GetDecimatedBuffers(bool disposeArrays = false)
+        public (ComputeBuffer, ComputeBuffer) GetDecimatedBuffers(bool disposeArrays = true)
         {
             ConversionStatus currStatus = Status;
             if (currStatus != ConversionStatus.WAITING && currStatus != ConversionStatus.CONVERTING && currStatus != ConversionStatus.DONE)

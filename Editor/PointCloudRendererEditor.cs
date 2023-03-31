@@ -9,6 +9,7 @@ namespace FastPoints
     public class PointCloudRendererEditor : Editor
     {
         bool showConverterOptions = false;
+        bool showRenderingDetails = false;
 
         SerializedProperty handle;
         SerializedProperty decimatedCloudSize;
@@ -24,6 +25,8 @@ namespace FastPoints
         SerializedProperty loadingNodeCount;
         SerializedProperty queuedActionCount;
         SerializedProperty cacheSize;
+        SerializedProperty converting;
+        SerializedProperty decimated;
         SerializedProperty converted;
         SerializedProperty converterStatus;
         SerializedProperty converterProgress;
@@ -32,6 +35,7 @@ namespace FastPoints
         SerializedProperty maxNodesToRender;
         SerializedProperty showDecimatedCloud;
         SerializedProperty converterParams;
+        SerializedProperty minNodeSize;
 
         // Converter params
         SerializedProperty source;
@@ -51,6 +55,7 @@ namespace FastPoints
             cachePointBudget = serializedObject.FindProperty("cachePointBudget");
             maxNodesToLoad = serializedObject.FindProperty("maxNodesToLoad");
             maxNodesToRender = serializedObject.FindProperty("maxNodesToRender");
+            minNodeSize = serializedObject.FindProperty("minNodeSize");
 
 
             visiblePointCount = serializedObject.FindProperty("visiblePointCount");
@@ -60,6 +65,8 @@ namespace FastPoints
             queuedActionCount = serializedObject.FindProperty("queuedActionCount");
             cacheSize = serializedObject.FindProperty("cacheSize");
             cachePoints = serializedObject.FindProperty("cachePoints");
+            converting = serializedObject.FindProperty("converting");
+            decimated = serializedObject.FindProperty("decimated");
             converted = serializedObject.FindProperty("converted");
             converterStatus = serializedObject.FindProperty("converterStatus");
             converterProgress = serializedObject.FindProperty("converterProgress");
@@ -78,37 +85,45 @@ namespace FastPoints
             serializedObject.Update();
 
             EditorGUILayout.PropertyField(handle);
-            EditorGUILayout.PropertyField(decimatedCloudSize);
-            EditorGUILayout.PropertyField(pointSize);
-            EditorGUILayout.PropertyField(cam);
-            EditorGUILayout.PropertyField(pointBudget);
-            EditorGUILayout.PropertyField(drawGizmos);
-            EditorGUILayout.PropertyField(cachePointBudget);
-            EditorGUILayout.PropertyField(maxNodesToLoad);
-            EditorGUILayout.PropertyField(maxNodesToRender);
-            EditorGUILayout.PropertyField(showDecimatedCloud);
+            if (decimated.boolValue)
+            {
+                EditorGUILayout.PropertyField(pointSize);
+            }
 
             if (converted.boolValue)
             {
+                EditorGUILayout.PropertyField(pointBudget);
+                EditorGUILayout.PropertyField(pointSize);
                 EditorGUILayout.LabelField($"Points rendering: {visiblePointCount.intValue}");
-                EditorGUILayout.LabelField($"Nodes rendering: {visibleNodeCount.intValue}");
-                // EditorGUILayout.LabelField($"Nodes loaded: {loadedNodeCount.intValue}");
-                EditorGUILayout.LabelField($"Nodes loading: {loadingNodeCount.intValue}");
-                EditorGUILayout.LabelField($"Queued actions: {queuedActionCount.intValue}");
-                EditorGUILayout.LabelField($"Cached nodes: {cacheSize.intValue}");
-                EditorGUILayout.LabelField($"Points in cache: {cachePoints.intValue}");
+                showRenderingDetails = EditorGUILayout.Foldout(showRenderingDetails, "Advanced rendering options");
+                if (showRenderingDetails)
+                {
+                    EditorGUILayout.PropertyField(cam, new GUIContent("Camera to render to"));
+                    EditorGUILayout.PropertyField(maxNodesToRender, new GUIContent("Max nodes to create / frame"));
+                    EditorGUILayout.PropertyField(maxNodesToLoad, new GUIContent("Max nodes to load / frame"));
+                    EditorGUILayout.PropertyField(minNodeSize, new GUIContent("Smallest node size to render"));
+                    EditorGUILayout.PropertyField(cachePointBudget);
+                    EditorGUILayout.PropertyField(drawGizmos);
+
+                    EditorGUILayout.LabelField($"Nodes rendering: {visibleNodeCount.intValue}");
+                    EditorGUILayout.LabelField($"Nodes loading: {loadingNodeCount.intValue}");
+                    EditorGUILayout.LabelField($"Points in cache: {cachePoints.intValue}");
+                    EditorGUILayout.LabelField($"Cached nodes: {cacheSize.intValue}");
+                }
             }
             else
             {
-
                 showConverterOptions = EditorGUILayout.Foldout(showConverterOptions, "Advanced conversion options");
                 if (showConverterOptions)
                 {
+                    GUI.enabled = !converting.boolValue;
+                    EditorGUILayout.PropertyField(decimatedCloudSize);
                     EditorGUILayout.PropertyField(source);
                     EditorGUILayout.PropertyField(outdir, new GUIContent("Target"));
                     EditorGUILayout.PropertyField(method);
                     EditorGUILayout.PropertyField(encoding);
                     EditorGUILayout.PropertyField(chunkMethod);
+                    GUI.enabled = true;
                 }
                 EditorGUILayout.LabelField($"Converter status: {converterStatus.stringValue}");
                 EditorGUILayout.LabelField($"Converter progress: {(converterProgress.floatValue == -1f ? "N/A" : $"{(int)(converterProgress.floatValue * 100)} %")}");

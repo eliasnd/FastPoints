@@ -10,6 +10,8 @@ namespace FastPoints
     [ExecuteInEditMode]
     public class PointCloudRenderer : MonoBehaviour
     {
+        public static LRU Cache = new LRU();
+
         #region public
         public PointCloudHandle handle;
         public int decimatedCloudSize = 1000000;
@@ -29,9 +31,10 @@ namespace FastPoints
         int oldCachePointBudget = 5000000;
         int oldMaxNodesToLoad = 10;
         int oldMaxNodesToRender = 30;
+        float oldMinNodeSize = 1;
         #endregion
 
-        # region converter
+        # region converter_params
         [SerializeField]
         string source;
         [SerializeField]
@@ -42,8 +45,19 @@ namespace FastPoints
         string encoding = "default";
         [SerializeField]
         string chunkMethod = "LASZIP";
+        [SerializeField]
+        string converterStatus;
+        [SerializeField]
+        float converterProgress;
+        [SerializeField]
+        bool converting = false;
+        [SerializeField]
+        bool decimated;
+        [SerializeField]
+        bool converted;
         # endregion
 
+        #region rendering_params
         [SerializeField]
         int visiblePointCount;
         [SerializeField]
@@ -53,55 +67,49 @@ namespace FastPoints
         [SerializeField]
         int loadingNodeCount;
         [SerializeField]
-        bool converted;
-        [SerializeField]
-        int queuedActionCount;
+        float minNodeSize = 1;
+        #endregion
+
+        #region cache
         [SerializeField]
         int cacheSize;
         [SerializeField]
         int cachePoints;
-        [SerializeField]
-        string converterStatus;
-        [SerializeField]
-        float converterProgress;
-
-        bool decimatedGenerated = false;
-        ComputeBuffer decimatedPosBuffer = null;
-        ComputeBuffer decimatedColBuffer = null;
-
-        OctreeGeometry geom;
-
-
-        Traverser t;
-        PointCloudConverter converter;
-
-        List<AABB> boxesToDraw = null;
-
-        #region rendering
-        Material mat;
         #endregion
 
+        #region converter
+        PointCloudConverter converter;
+        ComputeBuffer decimatedPosBuffer = null;
+        ComputeBuffer decimatedColBuffer = null;
+        #endregion
+
+        #region rendering
+        OctreeGeometry geom;
+        Traverser t;
+        Material mat;
+        object queueLock;
         Queue<OctreeGeometryNode> nodesToRender;
         Queue<OctreeGeometryNode> nodesToDelete;
-        object queueLock;
+
+        AppMonitor appMonitor;
+        #endregion
+
+        #region debug
+        List<AABB> boxesToDraw = null;
+        Camera cameraToDraw = null;
+
         public static bool debug = false;
-        public static LRU Cache = new LRU();
+        #endregion
 
         public Camera GetCurrentCamera()
         {
             if (cam != null)
                 return cam;
 
-            if (SceneView.currentDrawingSceneView != null)
-                return SceneView.currentDrawingSceneView.camera;
-
-            if (Application.isPlaying && Camera.main != null)
-                return Camera.main;
-
-            if (SceneView.lastActiveSceneView != null)
+            if (appMonitor.MostRecentRenderWindow == AppMonitor.RenderWindow.SCENE_VIEW)
                 return SceneView.lastActiveSceneView.camera;
-
-            return Camera.current;
+            else
+                return Camera.main;
         }
 
         public void Awake()
@@ -109,6 +117,7 @@ namespace FastPoints
             mat = new Material(Shader.Find("Custom/DefaultPoint"));
             queueLock = new object();
             converter = new PointCloudConverter();
+            appMonitor = FindObjectOfType<AppMonitor>();
         }
 
         public void Update()
@@ -138,18 +147,23 @@ namespace FastPoints
             }
             else if (handle != oldHandle)    // New data put in
             {
-                if (!handle.Converted)
+                if (!handle.Converted) {
                     converter.Start((source == null || source == "") ? handle.path : source, outdir, method, encoding, chunkMethod, decimatedCloudSize);
+                    converting = true;
+                }
                 else
                 {
+                    converting = false;
                     converted = true;
                     InitializeRendering();
                 }
+                oldHandle = handle;
             }
             else if (!handle.Converted && converter.Status == PointCloudConverter.ConversionStatus.DONE)    // Not new data, conversion finished but handle not updated
             {
                 handle.Converted = true;
                 converted = true;
+                AssetDatabase.SaveAssets();
                 InitializeRendering();
             }
             else if (handle.Converted)  // Not new data, already converted
@@ -160,15 +174,19 @@ namespace FastPoints
                     if (debug)
                         Debug.Log("Drawing with camera " + c.GetInstanceID());
                     t.SetCamera(c, transform.localToWorldMatrix);
+                    cameraToDraw = c;
                 }
+
                 if (maxNodesToLoad != oldMaxNodesToLoad || maxNodesToRender != oldMaxNodesToRender)
                     t.SetPerFrameNodeCounts(maxNodesToLoad, maxNodesToRender);
             }
 
             // Check dirty trackers
 
-            if (pointBudget != oldPointBudget && t != null)
+            if (pointBudget != oldPointBudget && t != null) {
                 t.SetPointBudget(pointBudget);
+                oldPointBudget = pointBudget;
+            }
 
             if (cachePointBudget != oldCachePointBudget)
             {
@@ -176,9 +194,10 @@ namespace FastPoints
                 oldCachePointBudget = cachePointBudget;
             }
 
-            // Update dirty trackers
-            oldHandle = handle;
-            oldPointBudget = pointBudget;
+            if (minNodeSize != oldMinNodeSize && minNodeSize > 0) {
+                t.SetMinNodeSize(minNodeSize);
+                oldMinNodeSize = minNodeSize;
+            }
         }
 
         public void InitializeRendering()
@@ -188,6 +207,7 @@ namespace FastPoints
 
             t = new Traverser(geom, this, pointBudget);
             t.Start();
+            t.SetCamera(Camera.main, transform.localToWorldMatrix);
         }
 
         public (Queue<OctreeGeometryNode>, Queue<OctreeGeometryNode>) SetQueues(Queue<OctreeGeometryNode> renderQueue, Queue<OctreeGeometryNode> deleteQueue)
@@ -254,6 +274,7 @@ namespace FastPoints
             {
                 if (decimatedPosBuffer == null)
                     (decimatedPosBuffer, decimatedColBuffer) = converter.GetDecimatedBuffers();
+                decimated = true;   
                 DrawDecimatedCloud();   // Just decimated point cloud
             }
             else
@@ -352,10 +373,10 @@ namespace FastPoints
             if (!drawGizmos)
                 return;
 
-            if (cam)
+            if (cameraToDraw != null)
             {
-                Gizmos.matrix = cam.transform.localToWorldMatrix;
-                Gizmos.DrawFrustum(Vector3.zero, cam.fieldOfView, cam.farClipPlane, cam.nearClipPlane, cam.aspect);
+                Gizmos.matrix = cameraToDraw.transform.localToWorldMatrix;
+                Gizmos.DrawFrustum(Vector3.zero, cameraToDraw.fieldOfView, cameraToDraw.farClipPlane, cameraToDraw.nearClipPlane, cameraToDraw.aspect);
             }
 
             if (boxesToDraw != null)
@@ -366,7 +387,20 @@ namespace FastPoints
                     Vector3 bboxCenter = (bbox.Center + geom.offset);
                     Gizmos.DrawWireCube(new Vector3(bboxCenter.x / geom.scale[0], bboxCenter.y / geom.scale[1], bboxCenter.z / geom.scale[2]), new Vector3(bbox.Size.x / geom.scale[0], bbox.Size.y / geom.scale[1], bbox.Size.z / geom.scale[2]));
                 }
+
             }
+        }
+
+        public void OnDisable()
+        {
+            if (decimatedPosBuffer != null)
+                decimatedPosBuffer.Release();
+
+            if (decimatedColBuffer != null)
+                decimatedColBuffer.Release();
+
+            if (!handle.Converted && converter.Status != PointCloudConverter.ConversionStatus.DONE)
+                converter.RemovePointCloud();
         }
     }
 }
