@@ -1,5 +1,21 @@
 using UnityEngine;
 using System.IO;
+// FastPoints
+// Copyright (C) 2023  Elias Neuman-Donihue
+
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 using System.Collections.Generic;
 using UnityEditor;
 
@@ -19,7 +35,7 @@ namespace FastPoints
         public Camera cam = null;
         public int pointBudget = 1000000;
         public int cachePointBudget = 5000000;
-        public bool drawGizmos = true;
+        public bool drawGizmos = false;
         public int maxNodesToLoad = 10;
         public int maxNodesToRender = 30;
         public bool showDecimatedCloud = false;
@@ -118,6 +134,11 @@ namespace FastPoints
             queueLock = new object();
             converter = new PointCloudConverter();
             appMonitor = FindObjectOfType<AppMonitor>();
+        }
+
+        void OnEnable()
+        {
+            oldHandle = null;
         }
 
         public void Update()
