@@ -22,17 +22,27 @@ namespace FastPoints
     [InitializeOnLoad]
     public class Startup
     {
+        static bool initialized = false;
+
         static Startup()
         {
-            AppMonitor[] monitors = GameObject.FindObjectsOfType<AppMonitor>();
-            foreach (AppMonitor am in monitors)
-                Object.DestroyImmediate(am.gameObject);
-
-            GameObject go = new GameObject();
-            go.name = "AppMonitor";
-            go.AddComponent<AppMonitor>();
+            EditorApplication.hierarchyChanged += SceneLoadCallback;
 
             FastPointsNativeApi.InitializeConverter();
+        }
+        static void SceneLoadCallback()
+        {
+            if (!initialized)
+            {
+                AppMonitor[] monitors = GameObject.FindObjectsOfType<AppMonitor>();
+                foreach (AppMonitor am in monitors)
+                    Object.DestroyImmediate(am.gameObject);
+
+                GameObject go = new GameObject();
+                go.name = "AppMonitor";
+                go.AddComponent<AppMonitor>();
+                initialized = true;
+            }
         }
     }
 
