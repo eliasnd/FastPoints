@@ -27,7 +27,15 @@ Contact: [Elias Neuman-Donihue](contact@eliasnd.com)
 
 ## Windows and Linux
 
-Directions to come
+1. Install the [Unity Hub](https://unity.com)
+
+2. Install the latest version of the Unity Editor and create a new Unity project
+
+3. Clone this repository into the Assets folder of your project
+
+4. Create a new folder called Plug-Ins also under the Assets folder
+
+5. Install the [native plugin](https://github.com/eliasnd/fastpoints-native/tree/windows) and move the generated `fastpoints-native.dll` and `laszip.dll` files to the Plug-Ins folder
 
 # Usage
 
@@ -77,3 +85,7 @@ For more information on settings controlling the Potree Converter, please refer 
 # Implementation
 
 This plugin uses an adapted version of the Potree converter to convert and seamlessly render clouds within the Unity environment. For more details please refer to my paper linked above.
+
+# Known Issues
+
+The loading bar is currently not very descriptive - it will stay at 0% during point cloud conversion, which is the largest chunk of the preprocessing pipeline, then jump to 100%. Hoping to implement a more accurate version in the near future.
