@@ -181,7 +181,14 @@ namespace FastPoints
                 node.octreeGeometry.posBytes = ArrayPool<Byte>.Shared.Rent((int)node.numPoints * 12);
                 attributeBuffers["position"].Item1.CopyTo(node.octreeGeometry.posBytes, 0);
                 node.octreeGeometry.colBytes = ArrayPool<Byte>.Shared.Rent((int)node.numPoints * 4);
-                attributeBuffers["rgba"].Item1.CopyTo(node.octreeGeometry.colBytes, 0);
+
+                // Only add colors if attribute provided
+                if (attributeBuffers.ContainsKey("rgba"))
+                    attributeBuffers["rgba"].Item1.CopyTo(node.octreeGeometry.colBytes, 0);
+                else
+                    for (int i = 0; i < (int)node.numPoints * 4; i++)
+                        node.octreeGeometry.colBytes[i] = 0x00;
+
 
                 node.loaded = true;
                 node.loading = false;
